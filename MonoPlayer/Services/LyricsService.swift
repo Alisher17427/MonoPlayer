@@ -26,6 +26,11 @@ struct LyricsCandidate: Sendable, Identifiable, Hashable {
     let syncedLyrics: String?
 
     var isSynced: Bool { syncedLyrics?.isEmpty == false }
+
+    var withoutSynced: LyricsCandidate {
+        LyricsCandidate(source: source, trackName: trackName, artistName: artistName, albumName: albumName,
+                        duration: duration, plainLyrics: plainLyrics, syncedLyrics: nil)
+    }
 }
 
 enum LyricsService {
@@ -126,7 +131,9 @@ enum LyricsService {
         if let best = synced.first {
             if duration <= 0 || best.duration == nil || distance(best) <= durationTolerance { return best }
         }
-        return relevant.first { $0.plainLyrics?.isEmpty == false }
+        // Запасной вариант — обычный текст. Синхронный текст чужой версии отбрасываем, оставляя только его слова.
+        if let plain = relevant.first(where: { !$0.isSynced && $0.plainLyrics?.isEmpty == false }) { return plain }
+        return relevant.first { $0.plainLyrics?.isEmpty == false }?.withoutSynced
     }
 
     private static func lyricsOvh(artist: String, title: String) async throws -> String? {
