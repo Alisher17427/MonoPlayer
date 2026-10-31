@@ -203,8 +203,7 @@ final class EnrichmentCoordinator {
             track.plainLyrics = trimmed
         } else {
             track.syncedLyricsRaw = trimmed
-            track.plainLyrics = lines.map(\.text).joined(separator: "
-")
+            track.plainLyrics = lines.map(\.text).joined(separator: "\n")
         }
         track.lyricsOffset = 0
         track.lyricsLocked = true
