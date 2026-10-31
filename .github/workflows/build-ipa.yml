@@ -53,7 +53,12 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             build 2>&1 | tee build.log | grep -E "error:|warning: .*(Sendable|isolat|concurren)|BUILD (SUCCEEDED|FAILED)" || true
-          test -d build/Build/Products/Release-iphoneos/MonoPlayer.app
+          if [ ! -d build/Build/Products/Release-iphoneos/MonoPlayer.app ]; then
+            # Ошибки компиляции — в аннотации: их видно на странице запуска и через публичный API
+            grep -E ": error: " build.log | sed -E 's#^.*/(MonoPlayer|MonoPlayerTests)/#\1/#' | sort -u | head -10 \
+              | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          fi
 
       - name: Package IPA
         run: |
@@ -111,4 +116,8 @@ jobs:
             -scheme MonoPlayer \
             -destination "id=$UDID" \
             -derivedDataPath build-tests \
-            -quiet
+            -quiet 2>&1 | tee test.log || {
+              grep -E ": error: |✘|failed" test.log | sed -E 's#^.*/(MonoPlayer|MonoPlayerTests)/#\1/#' | sort -u | head -10 \
+                | while IFS= read -r line; do echo "::error::$line"; done
+              exit 1
+            }
