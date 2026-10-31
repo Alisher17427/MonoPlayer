@@ -13,6 +13,10 @@ concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
 
+# Нужно для публикации IPA в Releases
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: macos-latest
@@ -28,6 +32,7 @@ jobs:
           sudo xcode-select -s "$XCODE/Contents/Developer"
           xcodebuild -version
           swift --version
+          echo "XCODE_VERSION=$(xcodebuild -version | head -1)" >> "$GITHUB_ENV"
 
       - name: Generate Xcode project
         run: |
@@ -63,6 +68,21 @@ jobs:
           name: MonoPlayer-ipa
           path: MonoPlayer.ipa
           retention-days: 30
+
+      # Прямая ссылка без входа в аккаунт:
+      # https://github.com/<владелец>/<репозиторий>/releases/latest/download/MonoPlayer.ipa
+      - name: Publish to Releases
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="build-${{ github.run_number }}"
+          gh release create "$TAG" MonoPlayer.ipa \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "MonoPlayer — сборка ${{ github.run_number }}" \
+            --notes "Неподписанный IPA для установки через Sideloadly. Собрано: ${XCODE_VERSION}, коммит ${GITHUB_SHA::7}." \
+            --latest
 
       - name: Upload build log
         if: always()

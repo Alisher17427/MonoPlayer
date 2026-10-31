@@ -18,8 +18,11 @@
    в его корень — через GitHub Desktop или `git push`.
 2. **Дождитесь сборки.** Вкладка **Actions** → запуск **Build IPA** (стартует сам после
    загрузки, или вручную кнопкой *Run workflow*). Занимает ~5–10 минут.
-3. **Скачайте IPA.** Откройте завершённый запуск → внизу раздел **Artifacts** →
-   `MonoPlayer-ipa` (это zip, внутри `MonoPlayer.ipa`).
+3. **Скачайте IPA.** Каждая сборка публикуется в **Releases**; последняя всегда доступна
+   по прямой ссылке без входа в аккаунт:
+   `https://github.com/<владелец>/<репозиторий>/releases/latest/download/MonoPlayer.ipa`.
+   Запасной путь — завершённый запуск в Actions → раздел **Artifacts** → `MonoPlayer-ipa`
+   (zip, нужен вход в GitHub).
    Если сборка упала — там же лежит `build-log`; строки с `error:` видны прямо в логе шага
    *Build for device*.
 4. **Установите на iPhone через [Sideloadly](https://sideloadly.io):**
