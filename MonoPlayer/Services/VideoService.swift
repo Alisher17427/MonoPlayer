@@ -17,40 +17,80 @@ enum YouTubeLink {
     /// Поиск клипа на YouTube. Ссылка https открывает приложение YouTube, если оно установлено.
     static func search(artist: String, title: String) -> URL {
         let cleanTitle = SearchQuery.titleVariants(title).last ?? title
-        let query = "\(SearchQuery.primaryArtist(artist)) \(cleanTitle) official video"
+        // Имя в кавычках — YouTube не подменит артиста похожим («FACE» ≠ «Babyface»)
+        let query = "\"\(SearchQuery.primaryArtist(artist))\" \(cleanTitle) official video"
         var components = URLComponents(string: "https://www.youtube.com/results")!
         components.queryItems = [URLQueryItem(name: "search_query", value: query)]
         return components.url!
     }
 }
 
+/// Клипы ищутся по ID артиста в каталоге, а не по подстроке имени:
+/// иначе к «FACE» подмешивались Babyface и «Poker Face». Если одноимённых артистов
+/// несколько (рэпер FACE и рок-группа FACE), выбираем того, чьи песни есть в медиатеке.
 enum VideoService {
-    private struct Response: Decodable {
-        struct Item: Decodable {
-            let trackId: Int?
-            let trackName: String?
-            let artistName: String?
-            let artworkUrl100: String?
-            let releaseDate: String?
-            let trackViewUrl: String?
-        }
-        let results: [Item]
+    struct Item: Decodable {
+        let wrapperType: String?
+        let kind: String?
+        let artistId: Int?
+        let trackId: Int?
+        let trackName: String?
+        let artistName: String?
+        let artworkUrl100: String?
+        let releaseDate: String?
+        let trackViewUrl: String?
     }
 
-    static func videos(forArtist artist: String) async throws -> [MusicVideo] {
-        guard let url = HTTP.url("https://itunes.apple.com/search", [
-            ("term", artist), ("entity", "musicVideo"), ("attribute", "artistTerm"), ("limit", "30"),
-        ]) else { return [] }
-        let (data, status) = try await HTTP.get(url)
-        guard status == 200 else { throw URLError(.badServerResponse) }
+    private struct Response: Decodable { let results: [Item] }
+
+    static func videos(forArtist artist: String, knownTitles: [String]) async throws -> [MusicVideo] {
+        let candidates = try await artistCandidates(named: artist)
+        guard !candidates.isEmpty else { return [] }
+
+        var artistID = candidates[0].artistId
+        if candidates.count > 1 {
+            let ids = candidates.compactMap(\.artistId).map(String.init).joined(separator: ",")
+            let songs = try await fetch([("id", ids), ("entity", "song"), ("limit", "50")])
+            artistID = bestArtistID(candidates: candidates, songs: songs, knownTitles: knownTitles)
+        }
+        guard let artistID else { return [] }
+
+        let items = try await fetch([("id", String(artistID)), ("entity", "musicVideo"), ("limit", "50")])
+        return musicVideos(from: items)
+    }
+
+    /// Артисты каталога с точно таким же именем (без учёта регистра и знаков), в порядке релевантности.
+    static func artistCandidates(named artist: String) async throws -> [Item] {
         let wanted = SearchQuery.normalize(artist)
+        guard !wanted.isEmpty else { return [] }
+        let items = try await fetch([
+            ("term", artist), ("entity", "musicArtist"), ("attribute", "artistTerm"), ("limit", "15"),
+        ], endpoint: "search")
+        return Array(items.filter { $0.artistId != nil && SearchQuery.normalize($0.artistName ?? "") == wanted }.prefix(8))
+    }
+
+    /// Выбор среди одноимённых: больше всего совпадений песен с медиатекой; при равенстве — порядок каталога.
+    static func bestArtistID(candidates: [Item], songs: [Item], knownTitles: [String]) -> Int? {
+        let known = Set(knownTitles.map(cleanKey).filter { !$0.isEmpty })
+        var scores: [Int: Int] = [:]
+        for song in songs where song.wrapperType == "track" {
+            guard let id = song.artistId, let title = song.trackName, known.contains(cleanKey(title)) else { continue }
+            scores[id, default: 0] += 1
+        }
+        let ids = candidates.compactMap(\.artistId)
+        let best = ids.max { (scores[$0] ?? 0) < (scores[$1] ?? 0) }
+        guard let best, (scores[best] ?? 0) > 0 else { return ids.first }
+        // max(by:) при равенстве берёт последний — возвращаем первый с лучшим счётом
+        return ids.first { scores[$0] == scores[best] }
+    }
+
+    static func musicVideos(from items: [Item]) -> [MusicVideo] {
         var seen = Set<String>()
-        return try JSONDecoder().decode(Response.self, from: data).results.compactMap { item in
-            guard let id = item.trackId, let title = item.trackName, let name = item.artistName else { return nil }
-            let normalizedArtist = SearchQuery.normalize(name)
-            guard normalizedArtist.contains(wanted) || wanted.contains(normalizedArtist) else { return nil }
+        return items.compactMap { item in
+            guard item.wrapperType == "track", item.kind == "music-video",
+                  let id = item.trackId, let title = item.trackName, let name = item.artistName else { return nil }
             // Убираем дубли (одно видео в нескольких регионах/версиях)
-            guard seen.insert(SearchQuery.normalize(SearchQuery.titleVariants(title).last ?? title)).inserted else { return nil }
+            guard seen.insert(cleanKey(title)).inserted else { return nil }
             return MusicVideo(
                 id: id, title: title, artist: name,
                 thumbnailURL: item.artworkUrl100.flatMap { URL(string: $0.replacingOccurrences(of: "100x100bb", with: "640x360bb")) },
@@ -58,6 +98,18 @@ enum VideoService {
                 appleURL: item.trackViewUrl.flatMap(URL.init(string:))
             )
         }
+    }
+
+    private static func cleanKey(_ title: String) -> String {
+        SearchQuery.normalize(SearchQuery.titleVariants(title).last ?? title)
+    }
+
+    /// Каталог US (по умолчанию): в российском клипов почти нет.
+    private static func fetch(_ items: [(String, String?)], endpoint: String = "lookup") async throws -> [Item] {
+        guard let url = HTTP.url("https://itunes.apple.com/\(endpoint)", items) else { return [] }
+        let (data, status) = try await HTTP.get(url)
+        guard status == 200 else { throw URLError(.badServerResponse) }
+        return try JSONDecoder().decode(Response.self, from: data).results
     }
 }
 
@@ -76,10 +128,12 @@ final class ArtistMediaStore {
 
     func isLoadingVideos(for artist: String) -> Bool { loadingVideos.contains(key(artist)) }
 
-    func loadVideos(for artist: String) async {
+    /// `knownTitles` — песни артиста из медиатеки: по ним выбирается нужный из одноимённых артистов.
+    func loadVideos(for artist: String, knownTitles: [String] = []) async {
         let key = key(artist)
         guard videos[key] == nil, !loadingVideos.contains(key) else { return }
-        let file = Self.directory.appending(path: "videos-\(Self.fileSafe(key)).json")
+        // v2: старый кэш содержал чужие клипы (поиск по подстроке имени)
+        let file = Self.directory.appending(path: "videos-v2-\(Self.fileSafe(key)).json")
 
         if let cached = Self.readFresh(file), let list = try? JSONDecoder().decode([MusicVideo].self, from: cached) {
             videos[key] = list
@@ -87,7 +141,7 @@ final class ArtistMediaStore {
         }
         loadingVideos.insert(key)
         defer { loadingVideos.remove(key) }
-        if let list = try? await VideoService.videos(forArtist: artist) {
+        if let list = try? await VideoService.videos(forArtist: artist, knownTitles: knownTitles) {
             videos[key] = list
             Self.write(try? JSONEncoder().encode(list), to: file)
         } else {

@@ -170,3 +170,31 @@ struct LibraryIndexTests {
         #expect(LibraryIndex.artists(from: tracks).map(\.name).sorted() == ["lildrughill", "rocket"])
     }
 }
+
+struct VideoArtistMatchTests {
+    private func item(_ wrapper: String, _ artistId: Int, _ name: String, title: String? = nil, kind: String? = nil, trackId: Int? = nil) -> VideoService.Item {
+        .init(wrapperType: wrapper, kind: kind, artistId: artistId, trackId: trackId, trackName: title,
+              artistName: name, artworkUrl100: nil, releaseDate: nil, trackViewUrl: nil)
+    }
+
+    @Test func picksNamesakeWhoseSongsAreInLibrary() {
+        let candidates = [item("artist", 1, "FACE"), item("artist", 2, "FACE")]
+        let songs = [item("track", 1, "FACE", title: "Cypress"), item("track", 2, "FACE", title: "Бургер"),
+                     item("track", 2, "FACE", title: "Я роняю запад")]
+        let id = VideoService.bestArtistID(candidates: candidates, songs: songs, knownTitles: ["Я РОНЯЮ ЗАПАД (prod. by X)"])
+        #expect(id == 2)
+    }
+
+    @Test func fallsBackToCatalogOrder() {
+        let candidates = [item("artist", 1, "FACE"), item("artist", 2, "FACE")]
+        #expect(VideoService.bestArtistID(candidates: candidates, songs: [], knownTitles: ["Unknown"]) == 1)
+    }
+
+    @Test func keepsOnlyMusicVideosWithoutDuplicates() {
+        let items = [item("artist", 1, "FACE"),
+                     item("track", 1, "FACE", title: "Плачу", kind: "music-video", trackId: 10),
+                     item("track", 1, "FACE", title: "Плачу [Live]", kind: "music-video", trackId: 11),
+                     item("track", 1, "FACE", title: "Бургер", kind: "song", trackId: 12)]
+        #expect(VideoService.musicVideos(from: items).map(\.id) == [10])
+    }
+}

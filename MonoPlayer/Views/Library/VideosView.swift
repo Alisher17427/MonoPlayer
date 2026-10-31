@@ -20,7 +20,7 @@ struct VideosView: View {
                 List {
                     ForEach(artists) { artist in
                         Section {
-                            ArtistVideosRow(artist: artist.name)
+                            ArtistVideosRow(artist: artist.name, knownTitles: artist.tracks.map(\.title))
                                 .listRowInsets(EdgeInsets())
                                 .listRowSeparator(.hidden)
                         } header: {

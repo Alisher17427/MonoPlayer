@@ -122,6 +122,8 @@ struct VideoCard: View {
 /// Горизонтальная лента клипов артиста с загрузкой по требованию.
 struct ArtistVideosRow: View {
     let artist: String
+    /// Названия его треков в медиатеке — чтобы не спутать с одноимённым артистом
+    var knownTitles: [String] = []
 
     @Environment(ArtistMediaStore.self) private var media
 
@@ -153,6 +155,6 @@ struct ArtistVideosRow: View {
                 .padding(.vertical, 8)
             }
         }
-        .task(id: artist) { await media.loadVideos(for: artist) }
+        .task(id: artist) { await media.loadVideos(for: artist, knownTitles: knownTitles) }
     }
 }
