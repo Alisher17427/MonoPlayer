@@ -1,0 +1,5 @@
+MonoPlayer.xcodeproj/
+MonoPlayer/Info.plist
+DerivedData/
+.DS_Store
+xcuserdata/

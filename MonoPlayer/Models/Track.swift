@@ -1,0 +1,61 @@
+import Foundation
+import SwiftData
+import SwiftUI
+
+enum EnrichmentStatus: String, Codable {
+    case pending
+    case enriching
+    case completed
+    case partial
+    case failed
+}
+
+@Model
+final class Track {
+    @Attribute(.unique) var id: UUID
+    var title: String
+    var artist: String
+    var album: String?
+    var duration: TimeInterval
+
+    // Относительные пути внутри контейнера приложения
+    var audioFileName: String
+    var artworkFileName: String?
+
+    // Тексты песен
+    var plainLyrics: String?
+    var syncedLyricsRaw: String? // Исходный LRC формат
+
+    // Доминантные цвета обложки ("RRGGBB,RRGGBB,RRGGBB") для фона Now Playing
+    var paletteHex: String?
+
+    // Системные поля
+    var dateAdded: Date
+    var enrichmentStatus: EnrichmentStatus
+
+    init(title: String, artist: String = Track.unknownArtist, duration: TimeInterval = 0, audioFileName: String) {
+        self.id = UUID()
+        self.title = title
+        self.artist = artist
+        self.duration = duration
+        self.audioFileName = audioFileName
+        self.dateAdded = Date()
+        self.enrichmentStatus = .pending
+    }
+
+    static let unknownArtist = "Неизвестный артист"
+}
+
+extension Track {
+    var audioURL: URL { Storage.trackURL(audioFileName) }
+
+    var artworkURL: URL? { artworkFileName.map(Storage.artworkURL) }
+
+    var hasKnownArtist: Bool { artist != Track.unknownArtist && !artist.isEmpty }
+
+    var palette: [Color] { ArtworkPalette.colors(fromHex: paletteHex) }
+
+    var isEnriching: Bool { enrichmentStatus == .pending || enrichmentStatus == .enriching }
+
+    var hasLyrics: Bool { syncedLyricsRaw != nil || plainLyrics != nil }
+}
