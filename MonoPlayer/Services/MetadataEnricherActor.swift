@@ -33,6 +33,7 @@ struct EnrichmentResult: Sendable {
     var title: String?
     var artist: String?
     var album: String?
+    var albumArtist: String?
     var duration: TimeInterval?
     var artworkFileName: String?
     var paletteHex: String?
@@ -59,12 +60,16 @@ actor MetadataEnricherActor {
             if let value = local.title { title = value; result.title = value }
             if let value = local.artist { artist = value; result.artist = value }
             if let value = local.album { album = value; result.album = value }
+            if let value = local.albumArtist { result.albumArtist = value }
         }
         if let value = local.duration { duration = value; result.duration = value }
         if !input.hasArtwork { artworkData = local.artworkData }
 
+        // В запросах — первый исполнитель: «rocket, lildrughill» ищем как «rocket»
+        var queryArtist: String? { artist.flatMap { SearchQuery.splitArtists($0).first } ?? artist }
+
         // Шаг 3: метаданные и обложка — iTunes → Deezer → MusicBrainz/Cover Art Archive
-        let search = await MetadataSearch.bestMatch(artist: artist, title: title)
+        let search = await MetadataSearch.bestMatch(artist: queryArtist, title: title)
         if let match = search.match, !locked {
             if local.title == nil { title = match.title; result.title = match.title }
             if artist == nil, !match.artist.isEmpty { artist = match.artist; result.artist = match.artist }
@@ -84,7 +89,7 @@ actor MetadataEnricherActor {
         var lyricsFailed = false
         if !input.hasSyncedLyrics {
             do {
-                if let lyrics = try await LyricsService.find(artist: artist, title: title, album: album, duration: duration) {
+                if let lyrics = try await LyricsService.find(artist: queryArtist, title: title, album: album, duration: duration) {
                     result.plainLyrics = lyrics.plainLyrics
                     result.syncedLyricsRaw = lyrics.syncedLyrics
                     lyricsFound = true
@@ -203,6 +208,7 @@ final class EnrichmentCoordinator {
             if let value = result.title { track.title = value }
             if let value = result.artist { track.artist = value }
             if let value = result.album { track.album = value }
+            if let value = result.albumArtist { track.albumArtist = value }
         }
         if let value = result.duration { track.duration = value }
         if let value = result.artworkFileName, track.artworkFileName == nil { track.artworkFileName = value }

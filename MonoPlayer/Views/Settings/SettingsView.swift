@@ -3,6 +3,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @AppStorage("appearance") private var appearance: Appearance = .system
+    @AppStorage(SearchQuery.splitAmpersandKey) private var splitAmpersand = true
     @Environment(\.dismiss) private var dismiss
     @Query private var tracks: [Track]
 
@@ -17,13 +18,18 @@ struct SettingsView: View {
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets())
                 }
-                Section("Медиатека") {
+                Section {
                     LabeledContent("Треков", value: "\(tracks.count)")
                     LabeledContent("С текстом", value: "\(tracks.filter(\.hasLyrics).count)")
+                    Toggle("Разделять исполнителей по «&»", isOn: $splitAmpersand)
+                } header: {
+                    Text("Медиатека")
+                } footer: {
+                    Text("Исполнители всегда разделяются по запятой, «feat.», «ft.» и «x». Выключите «&», если в медиатеке есть дуэты вроде «Simon & Garfunkel».")
                 }
                 Section {
-                    LabeledContent("Метаданные и обложки", value: "iTunes Search API")
-                    LabeledContent("Тексты песен", value: "LRCLIB")
+                    LabeledContent("Метаданные и обложки", value: "iTunes, Deezer, MusicBrainz")
+                    LabeledContent("Тексты песен", value: "LRCLIB, lyrics.ovh")
                 } header: {
                     Text("Источники данных")
                 } footer: {

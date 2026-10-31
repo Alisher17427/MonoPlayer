@@ -132,18 +132,36 @@ struct FullPlayerView: View {
         }
     }
 
-    /// Имя артиста — кнопка: закрывает плеер и открывает страницу исполнителя.
+    /// Имя артиста: один исполнитель — сразу его страница; несколько — меню выбора, у каждого своя страница.
+    @ViewBuilder
     private func artistButton(_ track: Track, font: Font) -> some View {
-        Button {
-            if track.hasKnownArtist { router.openArtist(track.artist) }
-        } label: {
-            MarqueeText(text: track.artist, font: font)
-                .foregroundStyle(.white.opacity(0.65))
+        let artists = track.artists
+        let label = MarqueeText(text: track.artist, font: font)
+            .foregroundStyle(.white.opacity(0.65))
+        if artists.count > 1 {
+            Menu {
+                Section("Исполнители") {
+                    ForEach(artists, id: \.self) { name in
+                        Button(name, systemImage: "music.mic") { router.openArtist(name) }
+                    }
+                }
+            } label: {
+                label
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Исполнители: \(artists.joined(separator: ", "))")
+            .accessibilityHint("Выбрать исполнителя и открыть его страницу")
+        } else {
+            Button {
+                if let name = artists.first { router.openArtist(name) }
+            } label: {
+                label
+            }
+            .buttonStyle(.plain)
+            .disabled(artists.isEmpty)
+            .accessibilityLabel("Артист \(track.artist)")
+            .accessibilityHint("Открыть страницу артиста")
         }
-        .buttonStyle(.plain)
-        .disabled(!track.hasKnownArtist)
-        .accessibilityLabel("Артист \(track.artist)")
-        .accessibilityHint("Открыть страницу артиста")
     }
 
     /// Подстройка синхронизации текста (сохраняется для трека).

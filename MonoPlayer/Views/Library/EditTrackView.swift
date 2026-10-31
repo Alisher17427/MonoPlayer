@@ -13,6 +13,7 @@ struct EditTrackView: View {
     @State private var title = ""
     @State private var artist = ""
     @State private var album = ""
+    @State private var albumArtist = ""
 
     @State private var metadataCandidates: [MetadataCandidate] = []
     @State private var lyricsCandidates: [LyricsCandidate] = []
@@ -35,10 +36,15 @@ struct EditTrackView: View {
                     .listRowBackground(Color.clear)
                 }
 
-                Section("Сведения") {
+                Section {
                     LabeledField(label: "Название", text: $title)
                     LabeledField(label: "Артист", text: $artist)
                     LabeledField(label: "Альбом", text: $album)
+                    LabeledField(label: "Исп. альбома", text: $albumArtist)
+                } header: {
+                    Text("Сведения")
+                } footer: {
+                    Text("Несколько исполнителей пишите через запятую, «feat.» или «x» — у каждого будет своя страница. «Исполнитель альбома» объединяет треки с разными исполнителями в один альбом; если пусто — определяется автоматически.")
                 }
 
                 metadataSection
@@ -59,6 +65,7 @@ struct EditTrackView: View {
                 title = track.title
                 artist = track.hasKnownArtist ? track.artist : ""
                 album = track.album ?? ""
+                albumArtist = track.albumArtist ?? ""
             }
         }
     }
@@ -263,13 +270,16 @@ struct EditTrackView: View {
         let newTitle = title.trimmingCharacters(in: .whitespaces)
         let newArtist = artist.trimmingCharacters(in: .whitespaces)
         let newAlbum = album.trimmingCharacters(in: .whitespaces).nilIfEmpty
+        let newAlbumArtist = albumArtist.trimmingCharacters(in: .whitespaces).nilIfEmpty
 
         let changed = newTitle != track.title
             || (newArtist.isEmpty ? Track.unknownArtist : newArtist) != track.artist
             || newAlbum != track.album
+            || newAlbumArtist != track.albumArtist
         track.title = newTitle
         track.artist = newArtist.isEmpty ? Track.unknownArtist : newArtist
         track.album = newAlbum
+        track.albumArtist = newAlbumArtist
         if changed || chosenArtwork != nil { track.metadataLocked = true }
 
         if let chosenLyrics {
@@ -297,7 +307,7 @@ private struct LabeledField: View {
         HStack {
             Text(label)
                 .foregroundStyle(Theme.Colors.labelSecondary)
-                .frame(width: 90, alignment: .leading)
+                .frame(width: 110, alignment: .leading)
             TextField(label, text: $text)
         }
     }

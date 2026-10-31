@@ -105,7 +105,7 @@ struct LibraryView: View {
                 category("Клипы", systemImage: "play.rectangle", route: .videos)
             }
 
-            let recentAlbums = recentAlbumKeys.compactMap { LibraryIndex.album($0, in: tracks) }
+            let recentAlbums = LibraryIndex.recentAlbums(from: tracks, limit: 10)
             if !recentAlbums.isEmpty {
                 Section {
                     ScrollView(.horizontal) {
@@ -134,19 +134,6 @@ struct LibraryView: View {
             }
         }
         .listStyle(.plain)
-    }
-
-    /// Альбомы в порядке добавления треков (сначала новые).
-    private var recentAlbumKeys: [AlbumKey] {
-        var seen = Set<AlbumKey>()
-        var result: [AlbumKey] = []
-        for track in tracks {
-            guard let key = track.albumKey else { continue }
-            let normalized = AlbumKey(title: key.title.lowercased(), artist: key.artist.lowercased())
-            if seen.insert(normalized).inserted { result.append(key) }
-            if result.count == 10 { break }
-        }
-        return result
     }
 
     private func category(_ title: String, systemImage: String, route: LibraryRoute) -> some View {
@@ -296,8 +283,15 @@ struct TrackMenuItems: View {
                 player.playNext(track)
             }
         }
-        if track.hasKnownArtist {
-            Button("Перейти к артисту", systemImage: "music.mic") { router.openArtist(track.artist) }
+        let artists = track.artists
+        if artists.count == 1 {
+            Button("Перейти к артисту", systemImage: "music.mic") { router.openArtist(artists[0]) }
+        } else if artists.count > 1 {
+            Menu("Перейти к артисту", systemImage: "music.mic") {
+                ForEach(artists, id: \.self) { name in
+                    Button(name) { router.openArtist(name) }
+                }
+            }
         }
         if let key = track.albumKey {
             Button("Перейти к альбому", systemImage: "square.stack") { router.openAlbum(key) }

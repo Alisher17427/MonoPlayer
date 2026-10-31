@@ -41,6 +41,7 @@ struct ArtistsView: View {
     private func subtitle(for artist: ArtistSummary) -> String {
         var parts = ["\(artist.tracks.count) \(AlbumDetailView.tracksWord(artist.tracks.count))"]
         if !artist.albums.isEmpty { parts.append("альбомов: \(artist.albums.count)") }
+        if !artist.appearsOn.isEmpty { parts.append("участие: \(artist.appearsOn.count)") }
         return parts.joined(separator: " · ")
     }
 }
@@ -80,22 +81,17 @@ struct ArtistDetailView: View {
 
                 if !artist.albums.isEmpty {
                     Section {
-                        ScrollView(.horizontal) {
-                            LazyHStack(alignment: .top, spacing: 14) {
-                                ForEach(artist.albums) { album in
-                                    NavigationLink(value: LibraryRoute.album(album.key)) {
-                                        AlbumCard(album: album, side: 150)
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                            .padding(.horizontal, Theme.Spacing.screen)
-                        }
-                        .scrollIndicators(.hidden)
-                        .listRowInsets(EdgeInsets())
-                        .listRowSeparator(.hidden)
+                        albumsRow(artist.albums)
                     } header: {
                         SectionHeader("Альбомы")
+                    }
+                }
+
+                if !artist.appearsOn.isEmpty {
+                    Section {
+                        albumsRow(artist.appearsOn)
+                    } header: {
+                        SectionHeader("Участие")
                     }
                 }
 
@@ -114,6 +110,23 @@ struct ArtistDetailView: View {
             ContentUnavailableView("Артист не найден", systemImage: "music.mic",
                                    description: Text("В медиатеке нет треков исполнителя «\(name)»."))
         }
+    }
+
+    private func albumsRow(_ albums: [AlbumSummary]) -> some View {
+        ScrollView(.horizontal) {
+            LazyHStack(alignment: .top, spacing: 14) {
+                ForEach(albums) { album in
+                    NavigationLink(value: LibraryRoute.album(album.key)) {
+                        AlbumCard(album: album, side: 150)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, Theme.Spacing.screen)
+        }
+        .scrollIndicators(.hidden)
+        .listRowInsets(EdgeInsets())
+        .listRowSeparator(.hidden)
     }
 
     private func header(_ artist: ArtistSummary) -> some View {

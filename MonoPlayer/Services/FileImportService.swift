@@ -22,6 +22,7 @@ struct LocalMetadata: Sendable {
     var title: String?
     var artist: String?
     var album: String?
+    var albumArtist: String?
     var duration: TimeInterval?
     var artworkData: Data?
 }
@@ -97,6 +98,17 @@ enum FileImportService {
                 break
             }
         }
+        // Исполнитель альбома нет среди common-ключей — ищем в ID3 (TPE2) и iTunes (aART)
+        if let all = try? await asset.load(.metadata) {
+            let albumArtistIDs: Set<AVMetadataIdentifier> = [.id3MetadataBand, .iTunesMetadataAlbumArtist]
+            for item in all where item.identifier.map({ albumArtistIDs.contains($0) }) == true {
+                if let value = try? await item.load(.stringValue), !value.isEmpty {
+                    result.albumArtist = value
+                    break
+                }
+            }
+        }
+        result.albumArtist = result.albumArtist?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         result.title = result.title?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         result.artist = result.artist?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         result.album = result.album?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty

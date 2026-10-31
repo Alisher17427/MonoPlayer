@@ -25,8 +25,9 @@ final class AppRouter {
     var showPlayer = false
     var editingTrack: Track?
 
+    /// Открывает страницу конкретного исполнителя (одного из участников трека).
     func openArtist(_ name: String) {
-        open(.artist(SearchQuery.primaryArtist(name)))
+        open(.artist(name))
     }
 
     func openAlbum(_ key: AlbumKey) {

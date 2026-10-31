@@ -16,6 +16,8 @@ final class Track {
     var title: String
     var artist: String
     var album: String?
+    /// Исполнитель альбома (тег TPE2/aART или вручную); без него определяется по трекам альбома
+    var albumArtist: String?
     var duration: TimeInterval
 
     // Относительные пути внутри контейнера приложения
@@ -64,11 +66,22 @@ extension Track {
 
     var hasLyrics: Bool { syncedLyricsRaw != nil || plainLyrics != nil }
 
-    /// Основной артист без «feat. …» — по нему группируются страницы артистов и альбомов.
+    /// Основной артист без «feat. …» — для поисковых запросов.
     var primaryArtist: String { SearchQuery.primaryArtist(artist) }
 
+    /// Все исполнители трека: "rocket, lildrughill" → ["rocket", "lildrughill"].
+    var artists: [String] { hasKnownArtist ? SearchQuery.splitArtists(artist) : [] }
+
+    /// Нормализованные ключи исполнителей (включая исполнителя альбома) — для группировки.
+    var artistKeys: Set<String> {
+        var keys = Set(artists.map(ArtistSummary.key(for:)))
+        if let albumArtist, !albumArtist.isEmpty { keys.insert(ArtistSummary.key(for: albumArtist)) }
+        return keys
+    }
+
+    /// Подсказка для перехода к альбому; точный альбом находит LibraryIndex по названию и общему исполнителю.
     var albumKey: AlbumKey? {
         guard let album, !album.isEmpty else { return nil }
-        return AlbumKey(title: album, artist: primaryArtist)
+        return AlbumKey(title: album, artist: albumArtist?.nilIfEmpty ?? artists.first ?? artist)
     }
 }

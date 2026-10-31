@@ -44,6 +44,31 @@ enum SearchQuery {
         return result.isEmpty ? artist : result
     }
 
+    /// Ключ настройки: считать «&» разделителем исполнителей (по умолчанию — да).
+    static let splitAmpersandKey = "splitArtistsOnAmpersand"
+
+    static var splitsAmpersand: Bool {
+        UserDefaults.standard.object(forKey: splitAmpersandKey) as? Bool ?? true
+    }
+
+    /// "rocket, lildrughill" → ["rocket", "lildrughill"];
+    /// "A feat. B & C" → ["A", "B", "C"]; "Macan x Jakone" → ["Macan", "Jakone"].
+    static func splitArtists(_ artist: String, splitAmpersand: Bool = SearchQuery.splitsAmpersand) -> [String] {
+        var text = artist
+        // feat./ft./featuring (в т.ч. в скобках) → запятая
+        text = replace(text, pattern: "\\s*[\\(\\[]\\s*(feat\\.?|ft\\.?|featuring)\\s+", with: ", ")
+        text = replace(text, pattern: "\\s+(feat\\.?|ft\\.?|featuring)\\s+", with: ", ")
+        text = replace(text, pattern: "[\\)\\]]", with: "")
+        var separators = "\\s*[,;]\\s*|\\s+[x×]\\s+"
+        if splitAmpersand { separators += "|\\s+&\\s+" }
+        text = replace(text, pattern: separators, with: "\u{1F}")
+
+        var seen = Set<String>()
+        return text.split(separator: "\u{1F}")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
+    }
+
     static func normalize(_ text: String) -> String {
         text.lowercased()
             .folding(options: [.diacriticInsensitive], locale: nil)
@@ -66,8 +91,12 @@ enum SearchQuery {
     }
 
     private static func strip(_ text: String, pattern: String) -> String {
+        replace(text, pattern: pattern, with: "")
+    }
+
+    private static func replace(_ text: String, pattern: String, with template: String) -> String {
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return text }
-        return regex.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "")
+        return regex.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: template)
     }
 }
 

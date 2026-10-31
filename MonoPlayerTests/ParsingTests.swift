@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 import Testing
 @testable import MonoPlayer
 
@@ -108,5 +109,64 @@ struct LyricsSelectionTests {
         #expect(lines.count == 1)
         #expect(lines.first?.text == "Hello world")
         #expect(lines.first?.time == 1.5)
+    }
+}
+
+struct ArtistSplitTests {
+    @Test func splitsCollaborations() {
+        #expect(SearchQuery.splitArtists("rocket, lildrughill", splitAmpersand: true) == ["rocket", "lildrughill"])
+        #expect(SearchQuery.splitArtists("Daft Punk feat. Pharrell Williams", splitAmpersand: true) == ["Daft Punk", "Pharrell Williams"])
+        #expect(SearchQuery.splitArtists("A (feat. B & C)", splitAmpersand: true) == ["A", "B", "C"])
+        #expect(SearchQuery.splitArtists("Macan x Jakone", splitAmpersand: true) == ["Macan", "Jakone"])
+        #expect(SearchQuery.splitArtists("Rocket ft. Lildrughill, Thomas Mraz", splitAmpersand: true) == ["Rocket", "Lildrughill", "Thomas Mraz"])
+    }
+
+    @Test func keepsSingleNames() {
+        #expect(SearchQuery.splitArtists("XXXTENTACION", splitAmpersand: true) == ["XXXTENTACION"])
+        #expect(SearchQuery.splitArtists("Lil Nas X", splitAmpersand: true) == ["Lil Nas X"])
+        #expect(SearchQuery.splitArtists("Simon & Garfunkel", splitAmpersand: false) == ["Simon & Garfunkel"])
+    }
+}
+
+@MainActor
+struct LibraryIndexTests {
+    private func makeTracks(_ specs: [(title: String, artist: String, album: String)]) throws -> (ModelContainer, [Track]) {
+        let container = try ModelContainer(for: Track.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let tracks = specs.map { spec -> Track in
+            let track = Track(title: spec.title, artist: spec.artist, audioFileName: "\(spec.title).mp3")
+            track.album = spec.album
+            container.mainContext.insert(track)
+            return track
+        }
+        return (container, tracks)
+    }
+
+    @Test func collaborationStaysInAlbum() throws {
+        let (container, tracks) = try makeTracks([
+            ("Intro", "rocket", "Album X"),
+            ("Duet", "rocket, lildrughill", "Album X"),
+            ("Hit", "Other", "Greatest Hits"),
+            ("Hit 2", "Someone", "Greatest Hits"),
+        ])
+        _ = container
+        let albums = LibraryIndex.albums(from: tracks)
+        #expect(albums.count == 3)
+        let albumX = albums.first { $0.key.title == "Album X" }
+        #expect(albumX?.tracks.count == 2)
+        #expect(albumX?.key.artist == "rocket")
+    }
+
+    @Test func everyArtistGetsAPage() throws {
+        let (container, tracks) = try makeTracks([
+            ("Intro", "rocket", "Album X"),
+            ("Duet", "rocket, lildrughill", "Album X"),
+        ])
+        _ = container
+        let second = LibraryIndex.artist(named: "lildrughill", in: tracks)
+        #expect(second?.tracks.map(\.title) == ["Duet"])
+        #expect(second?.albums.isEmpty == true)
+        #expect(second?.appearsOn.first?.key.title == "Album X")
+        #expect(LibraryIndex.artist(named: "rocket", in: tracks)?.albums.count == 1)
+        #expect(LibraryIndex.artists(from: tracks).map(\.name).sorted() == ["lildrughill", "rocket"])
     }
 }
