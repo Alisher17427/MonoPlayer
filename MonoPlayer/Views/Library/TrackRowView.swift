@@ -47,6 +47,12 @@ struct TrackRowView: View {
                         .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
                 }
                 Spacer(minLength: 0)
+                if track.isFavorite {
+                    Image(systemName: "heart.fill")
+                        .font(.caption)
+                        .foregroundStyle(Theme.Colors.labelSecondary)
+                        .accessibilityHidden(true)
+                }
                 statusIcon
             }
         }
@@ -54,7 +60,8 @@ struct TrackRowView: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(track.title), \(track.artist), \(track.duration.playbackTime)")
-        .accessibilityValue(isCurrent ? (isPlaying ? "Играет" : "На паузе") : "")
+        .accessibilityValue([isCurrent ? (isPlaying ? "Играет" : "На паузе") : nil,
+                             track.isFavorite ? "В любимых" : nil].compactMap { $0 }.joined(separator: ", "))
         .accessibilityAddTraits(.isButton)
     }
 

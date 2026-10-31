@@ -12,6 +12,7 @@ struct EnrichmentInput: Sendable {
     let duration: TimeInterval
     let hasArtwork: Bool
     let hasSyncedLyrics: Bool
+    let lyricsLocked: Bool
     let metadataLocked: Bool
 
     @MainActor
@@ -24,6 +25,7 @@ struct EnrichmentInput: Sendable {
         duration = track.duration
         hasArtwork = track.artworkFileName != nil
         hasSyncedLyrics = track.syncedLyricsRaw != nil
+        lyricsLocked = track.lyricsLocked
         metadataLocked = track.metadataLocked
     }
 }
@@ -84,10 +86,11 @@ actor MetadataEnricherActor {
             if result.artworkFileName != nil { result.paletteHex = ArtworkPalette.extractHex(from: artworkData) }
         }
 
-        // Шаг 4: текст песни (синхронный текст уже есть — не трогаем)
-        var lyricsFound = input.hasSyncedLyrics
+        // Шаг 4: текст песни (синхронный или выбранный вручную текст не трогаем)
+        let keepsLyrics = input.hasSyncedLyrics || input.lyricsLocked
+        var lyricsFound = keepsLyrics
         var lyricsFailed = false
-        if !input.hasSyncedLyrics {
+        if !keepsLyrics {
             do {
                 if let lyrics = try await LyricsService.find(artist: queryArtist, title: title, album: album, duration: duration) {
                     result.plainLyrics = lyrics.plainLyrics
@@ -156,15 +159,21 @@ final class EnrichmentCoordinator {
             track.plainLyrics = nil
             track.syncedLyricsRaw = nil
             track.lyricsOffset = 0
+            track.lyricsLocked = false
         }
         enqueue([track])
     }
 
     /// Ручной выбор обложки из кандидатов.
     func applyArtwork(from url: URL, to track: Track) async -> Bool {
-        guard let data = try? await ITunesSearchService.downloadData(from: url),
-              let fileName = MetadataEnricherActor.saveArtwork(data, id: track.id) else { return false }
-        guard !track.isDeleted else { return false }
+        guard let data = try? await ITunesSearchService.downloadData(from: url) else { return false }
+        return applyArtwork(data: data, to: track)
+    }
+
+    /// Своя обложка (из Фото или Файлов) или скачанная.
+    @discardableResult
+    func applyArtwork(data: Data, to track: Track) -> Bool {
+        guard !track.isDeleted, let fileName = MetadataEnricherActor.saveArtwork(data, id: track.id) else { return false }
         removeArtwork(of: track)
         track.artworkFileName = fileName
         track.paletteHex = ArtworkPalette.extractHex(from: data)
@@ -177,7 +186,34 @@ final class EnrichmentCoordinator {
         track.syncedLyricsRaw = candidate.syncedLyrics
         track.plainLyrics = candidate.plainLyrics
         track.lyricsOffset = 0
+        track.lyricsLocked = true
         if track.artworkFileName != nil { track.enrichmentStatus = .completed }
+        try? context?.save()
+    }
+
+    /// Свой текст: LRC с таймкодами становится синхронным, иначе — обычный текст. Пустой — убирает текст.
+    func applyCustomLyrics(_ text: String, to track: Track) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lines = LRCParser.parse(trimmed)
+        if trimmed.isEmpty {
+            track.syncedLyricsRaw = nil
+            track.plainLyrics = nil
+        } else if lines.isEmpty {
+            track.syncedLyricsRaw = nil
+            track.plainLyrics = trimmed
+        } else {
+            track.syncedLyricsRaw = trimmed
+            track.plainLyrics = lines.map(\.text).joined(separator: "
+")
+        }
+        track.lyricsOffset = 0
+        track.lyricsLocked = true
+        if track.artworkFileName != nil && track.hasLyrics { track.enrichmentStatus = .completed }
+        try? context?.save()
+    }
+
+    func clearArtwork(of track: Track) {
+        removeArtwork(of: track)
         try? context?.save()
     }
 

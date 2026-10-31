@@ -72,6 +72,7 @@ struct LibraryView: View {
                     home
                 }
             }
+            .reservesMiniPlayerSpace()
             .navigationTitle("Медиатека")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -99,6 +100,7 @@ struct LibraryView: View {
     private var home: some View {
         List {
             Section {
+                category("Любимые", systemImage: "heart", route: .favorites)
                 category("Артисты", systemImage: "music.mic", route: .artists)
                 category("Альбомы", systemImage: "square.stack", route: .albums)
                 category("Песни", systemImage: "music.note", route: .songs)
@@ -192,6 +194,36 @@ struct SongsView: View {
     }
 }
 
+/// Любимые треки: сначала добавленные последними.
+struct FavoritesView: View {
+    @Query(sort: \Track.dateAdded, order: .reverse) private var tracks: [Track]
+    @State private var query = ""
+
+    var body: some View {
+        let favorites = tracks
+            .filter(\.isFavorite)
+            .sorted { ($0.favoritedAt ?? .distantPast) > ($1.favoritedAt ?? .distantPast) }
+        let visible = favorites.filtered(by: query)
+        Group {
+            if visible.isEmpty {
+                if query.isEmpty {
+                    ContentUnavailableView(
+                        "Нет любимых треков",
+                        systemImage: "heart",
+                        description: Text("Нажмите ♡ в плеере или в меню трека, чтобы добавить его сюда.")
+                    )
+                } else {
+                    ContentUnavailableView.search(text: query)
+                }
+            } else {
+                TrackList(tracks: visible)
+            }
+        }
+        .navigationTitle("Любимые")
+        .searchable(text: $query, prompt: "Любимые треки")
+    }
+}
+
 struct SectionHeader: View {
     let title: String
     init(_ title: String) { self.title = title }
@@ -254,6 +286,11 @@ struct TrackRows: View {
                     player.playNext(track)
                 }
                 .tint(.gray)
+                Button(track.isFavorite ? "Убрать из любимых" : "В любимые",
+                       systemImage: track.isFavorite ? "heart.slash" : "heart") {
+                    track.toggleFavorite()
+                }
+                .tint(.pink)
             }
             .contextMenu {
                 TrackMenuItems(track: track, showsDelete: true)
@@ -282,6 +319,10 @@ struct TrackMenuItems: View {
             Button("Играть следующим", systemImage: "text.line.first.and.arrowtriangle.forward") {
                 player.playNext(track)
             }
+        }
+        Button(track.isFavorite ? "Убрать из любимых" : "Добавить в любимые",
+               systemImage: track.isFavorite ? "heart.slash" : "heart") {
+            track.toggleFavorite()
         }
         let artists = track.artists
         if artists.count == 1 {

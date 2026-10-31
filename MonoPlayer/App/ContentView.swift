@@ -1,7 +1,7 @@
 import SwiftData
 import SwiftUI
 
-/// Корневой TabView с мини-плеером (bottom accessory на iOS 26 / safeAreaInset на iOS 17–25).
+/// Корневой TabView с мини-плеером (bottom accessory на iOS 26 / поверх контента на iOS 17–25).
 struct ContentView: View {
     @Environment(AudioPlayerManager.self) private var player
     @Environment(EnrichmentCoordinator.self) private var enrichment
@@ -75,15 +75,17 @@ struct ContentView: View {
         #endif
     }
 
-    /// iOS 17–25 (и сборки на Xcode 16): мини-плеер в safeAreaInset над таб-баром.
+    /// iOS 17–25 (и сборки на Xcode 16): мини-плеер поверх контента над таб-баром.
+    /// Место под него резервирует каждый экран (`reservesMiniPlayerSpace`): safeAreaInset снаружи
+    /// NavigationStack на iOS 17 не доходит до вложенных экранов, и последний трек уходил под плеер.
     private var legacyTabs: some View {
         TabView(selection: Bindable(router).selectedTab) {
             LibraryView()
-                .safeAreaInset(edge: .bottom) { legacyMiniPlayer }
+                .overlay(alignment: .bottom) { legacyMiniPlayer }
                 .tabItem { Label("Медиатека", systemImage: "music.note.list") }
                 .tag(AppTab.library)
             SearchView()
-                .safeAreaInset(edge: .bottom) { legacyMiniPlayer }
+                .overlay(alignment: .bottom) { legacyMiniPlayer }
                 .tabItem { Label("Поиск", systemImage: "magnifyingglass") }
                 .tag(AppTab.search)
         }

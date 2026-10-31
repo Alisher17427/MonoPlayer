@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Токены дизайн-системы Graphite. Только семантические системные цвета —
-/// они сами адаптируются к светлой/тёмной теме и режиму повышенной контрастности.
+/// приложение всегда в тёмной теме, а цвета подстраиваются под режим повышенной контрастности.
 enum Theme {
     enum Colors {
         static let bgPrimary = Color(.systemBackground)
@@ -41,28 +41,5 @@ enum Theme {
         static let lyrics = Animation.spring(duration: 0.5)
         static let controls = Animation.snappy
         static let screen = Animation.smooth
-    }
-}
-
-/// Выбор темы в настройках.
-enum Appearance: String, CaseIterable, Identifiable {
-    case system, light, dark
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .system: "Системная"
-        case .light: "Светлая"
-        case .dark: "Тёмная"
-        }
-    }
-
-    var colorScheme: ColorScheme? {
-        switch self {
-        case .system: nil
-        case .light: .light
-        case .dark: .dark
-        }
     }
 }

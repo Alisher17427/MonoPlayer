@@ -8,6 +8,7 @@ enum AppTab: Hashable {
 /// Экраны внутри медиатеки.
 enum LibraryRoute: Hashable {
     case songs
+    case favorites
     case albums
     case artists
     case videos
@@ -47,14 +48,18 @@ extension View {
     /// Общие экраны для стеков медиатеки и поиска.
     func libraryDestinations() -> some View {
         navigationDestination(for: LibraryRoute.self) { route in
-            switch route {
-            case .songs: SongsView()
-            case .albums: AlbumsView()
-            case .artists: ArtistsView()
-            case .videos: VideosView()
-            case .artist(let name): ArtistDetailView(name: name)
-            case .album(let key): AlbumDetailView(key: key)
+            Group {
+                switch route {
+                case .songs: SongsView()
+                case .favorites: FavoritesView()
+                case .albums: AlbumsView()
+                case .artists: ArtistsView()
+                case .videos: VideosView()
+                case .artist(let name): ArtistDetailView(name: name)
+                case .album(let key): AlbumDetailView(key: key)
+                }
             }
+            .reservesMiniPlayerSpace()
         }
     }
 }

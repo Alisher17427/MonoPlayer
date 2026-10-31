@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Плавающая капсула над таб-баром. На iOS 26 живёт в `tabViewBottomAccessory`
-/// (стекло рисует система), на iOS 17–25 — в `safeAreaInset` со своим материалом.
+/// (стекло рисует система), на iOS 17–25 — поверх контента со своим материалом.
 struct MiniPlayerView: View {
     var inAccessory = false
     let namespace: Namespace.ID
@@ -123,5 +123,33 @@ private struct MiniPlayerChrome: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+extension View {
+    /// Отступ снизу под мини-плеер на iOS 17–25, чтобы последний элемент списка не прятался под ним.
+    /// На iOS 26 место освобождает сама система (`tabViewBottomAccessory`).
+    func reservesMiniPlayerSpace() -> some View {
+        modifier(MiniPlayerSpace())
+    }
+}
+
+private struct MiniPlayerSpace: ViewModifier {
+    @Environment(AudioPlayerManager.self) private var player
+
+    func body(content: Content) -> some View {
+        content.safeAreaInset(edge: .bottom, spacing: 0) {
+            if player.currentTrack != nil && Self.isOverlay {
+                // Высота капсулы + её отступ снизу + небольшой зазор
+                Color.clear.frame(height: Theme.Size.miniPlayerHeight + 12)
+            }
+        }
+    }
+
+    private static var isOverlay: Bool {
+        #if compiler(>=6.2)
+        if #available(iOS 26, *) { return false }
+        #endif
+        return true
     }
 }

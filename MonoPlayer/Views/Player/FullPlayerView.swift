@@ -105,6 +105,7 @@ struct FullPlayerView: View {
             }
             Spacer()
             if !lyricLines.isEmpty { syncMenu(track) }
+            favoriteButton(track)
             trackMenu(track)
         }
         .padding(.horizontal, Theme.Spacing.player)
@@ -128,8 +129,24 @@ struct FullPlayerView: View {
                     .accessibilityHint("Открыть страницу альбома")
                 }
             }
+            favoriteButton(track)
             trackMenu(track)
         }
+    }
+
+    private func favoriteButton(_ track: Track) -> some View {
+        Button {
+            track.toggleFavorite()
+        } label: {
+            Image(systemName: track.isFavorite ? "heart.fill" : "heart")
+                .font(.title3)
+                .contentTransition(.symbolEffect(.replace))
+                .symbolEffect(.bounce, value: track.isFavorite)
+                .frame(width: Theme.Size.minTapTarget, height: Theme.Size.minTapTarget)
+        }
+        .buttonStyle(.plain)
+        .sensoryFeedback(.impact(weight: .light), trigger: track.isFavorite)
+        .accessibilityLabel(track.isFavorite ? "Убрать из любимых" : "Добавить в любимые")
     }
 
     /// Имя артиста: один исполнитель — сразу его страница; несколько — меню выбора, у каждого своя страница.

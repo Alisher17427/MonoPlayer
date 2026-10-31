@@ -77,7 +77,7 @@ open MonoPlayer.xcodeproj
 ```
 .github/workflows/  build-ipa.yml — облачная сборка неподписанного IPA + тесты
 MonoPlayer/
-├── App/            MonoPlayerApp (SwiftData, тема), ContentView (TabView + мини-плеер),
+├── App/            MonoPlayerApp (SwiftData, тёмная тема), ContentView (TabView + мини-плеер),
 │                   AppRouter (вкладки, стек медиатеки, переходы из плеера)
 ├── Models/         Track (@Model), LyricLine, LibraryIndex (альбомы и артисты из треков)
 ├── Services/       AudioPlayerManager, FileImportService, MetadataEnricherActor,

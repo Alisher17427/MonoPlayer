@@ -1,6 +1,8 @@
+import PhotosUI
 import SwiftUI
+import UniformTypeIdentifiers
 
-/// Ручная правка сведений: поля, выбор совпадения (метаданные + обложка) и выбор текста песни.
+/// Ручная правка сведений: поля, своя обложка, выбор совпадения (метаданные + обложка), поиск или свой текст песни.
 /// Изменённые вручную поля блокируются от автопоиска — теги файла их больше не перезапишут.
 struct EditTrackView: View {
     let track: Track
@@ -24,6 +26,31 @@ struct EditTrackView: View {
     @State private var chosenArtwork: MetadataCandidate?
     @State private var chosenLyrics: LyricsCandidate?
 
+    // Своя обложка: готовый JPEG и картинка для превью; или запрос удалить обложку
+    @State private var customArtwork: Data?
+    @State private var customArtworkImage: UIImage?
+    @State private var removesArtwork = false
+    @State private var photoItem: PhotosPickerItem?
+    @State private var preparingArtwork = false
+
+    // Свой текст (обычный или LRC)
+    @State private var lyricsText = ""
+    @State private var originalLyricsText = ""
+
+    @State private var importTarget: ImportTarget?
+    @State private var importError: String?
+
+    private enum ImportTarget {
+        case artwork, lyrics
+
+        var contentTypes: [UTType] {
+            switch self {
+            case .artwork: [.image]
+            case .lyrics: [.plainText, .text] + [UTType(filenameExtension: "lrc")].compactMap { $0 }
+            }
+        }
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -35,6 +62,8 @@ struct EditTrackView: View {
                     }
                     .listRowBackground(Color.clear)
                 }
+
+                artworkSection
 
                 Section {
                     LabeledField(label: "Название", text: $title)
@@ -49,7 +78,9 @@ struct EditTrackView: View {
 
                 metadataSection
                 lyricsSection
+                customLyricsSection
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Сведения о треке")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -58,7 +89,7 @@ struct EditTrackView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Готово") { save() }
-                        .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty || preparingArtwork)
                 }
             }
             .onAppear {
@@ -66,13 +97,50 @@ struct EditTrackView: View {
                 artist = track.hasKnownArtist ? track.artist : ""
                 album = track.album ?? ""
                 albumArtist = track.albumArtist ?? ""
+                lyricsText = track.syncedLyricsRaw ?? track.plainLyrics ?? ""
+                originalLyricsText = lyricsText
+            }
+            .onChange(of: photoItem) { _, item in
+                guard let item else { return }
+                Task {
+                    preparingArtwork = true
+                    if let data = try? await item.loadTransferable(type: Data.self) {
+                        await setCustomArtwork(data)
+                    } else {
+                        importError = "Не удалось загрузить фото."
+                    }
+                    preparingArtwork = false
+                    photoItem = nil
+                }
+            }
+            .fileImporter(
+                isPresented: Binding(get: { importTarget != nil }, set: { if !$0 { importTarget = nil } }),
+                allowedContentTypes: importTarget?.contentTypes ?? [.item]
+            ) { result in
+                let target = importTarget
+                importTarget = nil
+                guard case let .success(url) = result, let target else { return }
+                Task { await importFile(url, as: target) }
+            }
+            .alert("Ошибка", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(importError ?? "")
             }
         }
     }
 
     @ViewBuilder
     private var artworkPreview: some View {
-        if let url = chosenArtwork?.artworkURL {
+        if let customArtworkImage {
+            Image(uiImage: customArtworkImage)
+                .resizable()
+                .scaledToFill()
+                .frame(width: 120, height: 120)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        } else if removesArtwork {
+            ArtworkView(fileName: nil, size: 120, cornerRadius: 10)
+        } else if let url = chosenArtwork?.artworkURL {
             AsyncImage(url: url) { phase in
                 if let image = phase.image { image.resizable().scaledToFill() } else { Theme.Colors.bgSecondary }
             }
@@ -80,6 +148,80 @@ struct EditTrackView: View {
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         } else {
             ArtworkView(fileName: track.artworkFileName, size: 120, cornerRadius: 10, isLoading: track.isEnriching)
+        }
+    }
+
+    // MARK: - Своя обложка
+
+    private var hasArtworkAfterEdits: Bool {
+        customArtwork != nil || (!removesArtwork && (chosenArtwork != nil || track.artworkFileName != nil))
+    }
+
+    private var artworkSection: some View {
+        Section {
+            PhotosPicker(selection: $photoItem, matching: .images) {
+                HStack {
+                    Label("Выбрать из Фото", systemImage: "photo.on.rectangle")
+                    Spacer()
+                    if preparingArtwork { ProgressView() }
+                }
+            }
+            .disabled(preparingArtwork)
+            Button {
+                importTarget = .artwork
+            } label: {
+                Label("Выбрать из Файлов", systemImage: "folder")
+            }
+            .disabled(preparingArtwork)
+            if hasArtworkAfterEdits {
+                Button(role: .destructive) {
+                    customArtwork = nil
+                    customArtworkImage = nil
+                    chosenArtwork = nil
+                    removesArtwork = true
+                } label: {
+                    Label("Удалить обложку", systemImage: "trash")
+                }
+            }
+        } header: {
+            Text("Обложка")
+        } footer: {
+            Text("Картинка обрезается до квадрата по центру.")
+        }
+    }
+
+    private func setCustomArtwork(_ data: Data) async {
+        let prepared = await Task.detached(priority: .userInitiated) { ArtworkLoader.squareJPEG(from: data) }.value
+        guard let prepared, let image = UIImage(data: prepared) else {
+            importError = "Не удалось открыть изображение."
+            return
+        }
+        customArtwork = prepared
+        customArtworkImage = image
+        chosenArtwork = nil
+        removesArtwork = false
+    }
+
+    private func importFile(_ url: URL, as target: ImportTarget) async {
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        guard let data = try? Data(contentsOf: url) else {
+            importError = "Не удалось прочитать файл."
+            return
+        }
+        switch target {
+        case .artwork:
+            preparingArtwork = true
+            await setCustomArtwork(data)
+            preparingArtwork = false
+        case .lyrics:
+            // Старые LRC часто в Windows-1251
+            guard let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .windowsCP1251) else {
+                importError = "Не удалось прочитать текст: неизвестная кодировка."
+                return
+            }
+            lyricsText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            chosenLyrics = nil
         }
     }
 
@@ -168,7 +310,7 @@ struct EditTrackView: View {
 
             ForEach(lyricsCandidates) { candidate in
                 Button {
-                    chosenLyrics = chosenLyrics?.id == candidate.id ? nil : candidate
+                    chooseLyrics(candidate)
                 } label: {
                     HStack(spacing: 12) {
                         VStack(alignment: .leading, spacing: 3) {
@@ -204,6 +346,61 @@ struct EditTrackView: View {
             Text("Текст песни")
         } footer: {
             Text("Для караоке выбирайте синхронный текст с длительностью как у файла (\(track.duration.playbackTime)). Оранжевым отмечены версии другой длины — тайминги могут не совпасть.")
+        }
+    }
+
+    // MARK: - Свой текст
+
+    private var customLyricsSection: some View {
+        let syncedLines = LRCParser.parse(lyricsText).count
+        return Section {
+            TextEditor(text: $lyricsText)
+                .frame(minHeight: 180)
+                .overlay(alignment: .topLeading) {
+                    if lyricsText.isEmpty {
+                        Text("Вставьте или напишите текст песни")
+                            .foregroundStyle(Theme.Colors.labelTertiary)
+                            .padding(.top, 8)
+                            .padding(.leading, 5)
+                            .allowsHitTesting(false)
+                    }
+                }
+            Button {
+                importTarget = .lyrics
+            } label: {
+                Label("Загрузить из файла (.lrc, .txt)", systemImage: "doc.text")
+            }
+            if !lyricsText.isEmpty {
+                Button(role: .destructive) {
+                    lyricsText = ""
+                    chosenLyrics = nil
+                } label: {
+                    Label("Очистить текст", systemImage: "xmark.circle")
+                }
+            }
+        } header: {
+            Text("Свой текст")
+        } footer: {
+            if syncedLines > 0 {
+                Text("Синхронный текст: строк с таймкодами — \(syncedLines). Они будут подсвечиваться под музыку.")
+            } else {
+                Text("Обычный текст или LRC с таймкодами вида [01:23.45] — тогда строки будут подсвечиваться под музыку. Свой текст автопоиск не заменит.")
+            }
+        }
+    }
+
+    private func candidateText(_ candidate: LyricsCandidate) -> String {
+        candidate.syncedLyrics?.nilIfEmpty ?? candidate.plainLyrics ?? ""
+    }
+
+    /// Выбор найденного текста заполняет «Свой текст» — его можно подправить перед сохранением.
+    private func chooseLyrics(_ candidate: LyricsCandidate) {
+        if chosenLyrics?.id == candidate.id {
+            chosenLyrics = nil
+            lyricsText = originalLyricsText
+        } else {
+            chosenLyrics = candidate
+            lyricsText = candidateText(candidate)
         }
     }
 
@@ -261,6 +458,9 @@ struct EditTrackView: View {
             return
         }
         chosenArtwork = candidate
+        customArtwork = nil
+        customArtworkImage = nil
+        removesArtwork = false
         title = candidate.title
         if !candidate.artist.isEmpty { artist = candidate.artist }
         if let value = candidate.album { album = value }
@@ -282,12 +482,18 @@ struct EditTrackView: View {
         track.albumArtist = newAlbumArtist
         if changed || chosenArtwork != nil { track.metadataLocked = true }
 
-        if let chosenLyrics {
+        if let chosenLyrics, lyricsText == candidateText(chosenLyrics) {
             enrichment.applyLyrics(chosenLyrics, to: track)
+        } else if lyricsText != originalLyricsText {
+            enrichment.applyCustomLyrics(lyricsText, to: track)
         }
         try? modelContext.save()
 
-        if let url = chosenArtwork?.artworkURL {
+        if let customArtwork {
+            enrichment.applyArtwork(data: customArtwork, to: track)
+        } else if removesArtwork {
+            enrichment.clearArtwork(of: track)
+        } else if let url = chosenArtwork?.artworkURL {
             let track = track
             Task {
                 _ = await enrichment.applyArtwork(from: url, to: track)

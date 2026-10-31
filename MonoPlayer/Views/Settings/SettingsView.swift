@@ -2,7 +2,6 @@ import SwiftData
 import SwiftUI
 
 struct SettingsView: View {
-    @AppStorage("appearance") private var appearance: Appearance = .system
     @AppStorage(SearchQuery.splitAmpersandKey) private var splitAmpersand = true
     @Environment(\.dismiss) private var dismiss
     @Query private var tracks: [Track]
@@ -10,17 +9,10 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Оформление") {
-                    Picker("Тема", selection: $appearance) {
-                        ForEach(Appearance.allCases) { Text($0.title).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets())
-                }
                 Section {
                     LabeledContent("Треков", value: "\(tracks.count)")
                     LabeledContent("С текстом", value: "\(tracks.filter(\.hasLyrics).count)")
+                    LabeledContent("Любимых", value: "\(tracks.filter(\.isFavorite).count)")
                     Toggle("Разделять исполнителей по «&»", isOn: $splitAmpersand)
                 } header: {
                     Text("Медиатека")

@@ -5,7 +5,6 @@ import SwiftUI
 struct MonoPlayerApp: App {
     @State private var player = AudioPlayerManager()
     @State private var enrichment = EnrichmentCoordinator()
-    @AppStorage("appearance") private var appearance: Appearance = .system
 
     private let container: ModelContainer = {
         do {
@@ -21,7 +20,8 @@ struct MonoPlayerApp: App {
                 .environment(player)
                 .environment(enrichment)
                 .tint(Theme.Colors.tint)
-                .preferredColorScheme(appearance.colorScheme)
+                // Приложение всегда в тёмной теме
+                .preferredColorScheme(.dark)
         }
         .modelContainer(container)
     }

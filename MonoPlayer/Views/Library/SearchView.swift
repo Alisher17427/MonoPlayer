@@ -66,6 +66,7 @@ struct SearchView: View {
                     }
                 }
             }
+            .reservesMiniPlayerSpace()
             .navigationTitle("Поиск")
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Артисты, альбомы, треки")
             .libraryDestinations()

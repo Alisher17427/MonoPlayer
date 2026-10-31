@@ -76,4 +76,18 @@ enum ArtworkLoader {
         if let image { cache.storage.setObject(image, forKey: key) }
         return image
     }
+
+    /// Своя обложка: обрезка по центру до квадрата, не больше `maxPixelSize`, в JPEG (HEIC/PNG тоже читаются).
+    static func squareJPEG(from data: Data, maxPixelSize: Int = 1400) -> Data? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        let side = min(image.width, image.height)
+        let crop = CGRect(x: (image.width - side) / 2, y: (image.height - side) / 2, width: side, height: side)
+        return UIImage(cgImage: image.cropping(to: crop) ?? image).jpegData(compressionQuality: 0.9)
+    }
 }

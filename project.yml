@@ -35,6 +35,8 @@ targets:
         CFBundleDevelopmentRegion: ru
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
+        # Всегда тёмная тема (и для системных окон: выбор файлов, фото)
+        UIUserInterfaceStyle: Dark
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         UISupportedInterfaceOrientations:
