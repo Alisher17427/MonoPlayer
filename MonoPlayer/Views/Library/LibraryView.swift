@@ -44,44 +44,40 @@ extension Array where Element == Track {
     }
 }
 
-/// Медиатека: large title, поиск, сортировка, импорт и пустое состояние.
+enum AudioImport {
+    static var contentTypes: [UTType] {
+        var types: [UTType] = [.audio, .mp3, .mpeg4Audio, .wav, .aiff]
+        if let flac = UTType("org.xiph.flac") { types.append(flac) }
+        return types
+    }
+}
+
+/// Медиатека: разделы, недавно добавленные альбомы и треки, импорт.
 struct LibraryView: View {
     @Query(sort: \Track.dateAdded, order: .reverse) private var tracks: [Track]
     @Environment(\.modelContext) private var modelContext
     @Environment(EnrichmentCoordinator.self) private var enrichment
+    @Environment(AppRouter.self) private var router
 
-    @AppStorage("librarySort") private var sort: LibrarySort = .dateAdded
-    @State private var query = ""
     @State private var showImporter = false
     @State private var showSettings = false
     @State private var importedCount = 0
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: Bindable(router).libraryPath) {
             Group {
                 if tracks.isEmpty {
                     emptyState
                 } else {
-                    let visible = sort.sorted(tracks).filtered(by: query)
-                    if visible.isEmpty {
-                        ContentUnavailableView.search(text: query)
-                    } else {
-                        TrackList(tracks: visible)
-                    }
+                    home
                 }
             }
             .navigationTitle("Медиатека")
-            .searchable(text: $query, prompt: "Треки, артисты, альбомы")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Настройки", systemImage: "gearshape") { showSettings = true }
                 }
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    Menu("Сортировка", systemImage: "arrow.up.arrow.down") {
-                        Picker("Сортировка", selection: $sort) {
-                            ForEach(LibrarySort.allCases) { Text($0.title).tag($0) }
-                        }
-                    }
+                ToolbarItem(placement: .topBarTrailing) {
                     Button("Импортировать", systemImage: "plus") { showImporter = true }
                 }
             }
@@ -96,6 +92,72 @@ struct LibraryView: View {
             }
             .sensoryFeedback(.success, trigger: importedCount)
             .sheet(isPresented: $showSettings) { SettingsView() }
+            .libraryDestinations()
+        }
+    }
+
+    private var home: some View {
+        List {
+            Section {
+                category("Артисты", systemImage: "music.mic", route: .artists)
+                category("Альбомы", systemImage: "square.stack", route: .albums)
+                category("Песни", systemImage: "music.note", route: .songs)
+                category("Клипы", systemImage: "play.rectangle", route: .videos)
+            }
+
+            let recentAlbums = recentAlbumKeys.compactMap { LibraryIndex.album($0, in: tracks) }
+            if !recentAlbums.isEmpty {
+                Section {
+                    ScrollView(.horizontal) {
+                        LazyHStack(alignment: .top, spacing: 14) {
+                            ForEach(recentAlbums) { album in
+                                NavigationLink(value: LibraryRoute.album(album.key)) {
+                                    AlbumCard(album: album, side: 150)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, Theme.Spacing.screen)
+                    }
+                    .scrollIndicators(.hidden)
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                } header: {
+                    SectionHeader("Недавно добавленные альбомы")
+                }
+            }
+
+            Section {
+                TrackRows(tracks: Array(tracks.prefix(12)), queue: tracks)
+            } header: {
+                SectionHeader("Недавно добавленные треки")
+            }
+        }
+        .listStyle(.plain)
+    }
+
+    /// Альбомы в порядке добавления треков (сначала новые).
+    private var recentAlbumKeys: [AlbumKey] {
+        var seen = Set<AlbumKey>()
+        var result: [AlbumKey] = []
+        for track in tracks {
+            guard let key = track.albumKey else { continue }
+            let normalized = AlbumKey(title: key.title.lowercased(), artist: key.artist.lowercased())
+            if seen.insert(normalized).inserted { result.append(key) }
+            if result.count == 10 { break }
+        }
+        return result
+    }
+
+    private func category(_ title: String, systemImage: String, route: LibraryRoute) -> some View {
+        NavigationLink(value: route) {
+            Label {
+                Text(title).font(.title3)
+            } icon: {
+                Image(systemName: systemImage)
+                    .foregroundStyle(Theme.Colors.labelPrimary)
+            }
+            .padding(.vertical, 4)
         }
     }
 
@@ -112,74 +174,155 @@ struct LibraryView: View {
     }
 }
 
-enum AudioImport {
-    static var contentTypes: [UTType] {
-        var types: [UTType] = [.audio, .mp3, .mpeg4Audio, .wav, .aiff]
-        if let flac = UTType("org.xiph.flac") { types.append(flac) }
-        return types
-    }
-}
-
-/// Список треков, общий для медиатеки и поиска: воспроизведение, свайпы, контекстное меню.
-struct TrackList: View {
-    let tracks: [Track]
-
-    @Environment(AudioPlayerManager.self) private var player
-    @Environment(EnrichmentCoordinator.self) private var enrichment
-    @Environment(\.modelContext) private var modelContext
-    @State private var editingTrack: Track?
-    @State private var selectionTick = 0
+/// Все песни: сортировка и поиск.
+struct SongsView: View {
+    @Query(sort: \Track.dateAdded, order: .reverse) private var tracks: [Track]
+    @AppStorage("librarySort") private var sort: LibrarySort = .dateAdded
+    @State private var query = ""
 
     var body: some View {
-        List {
-            ForEach(tracks) { track in
-                let isCurrent = player.currentTrack?.id == track.id
-                Button {
-                    if isCurrent {
-                        player.togglePlayPause()
-                    } else {
-                        player.play(track, in: tracks)
-                    }
-                    selectionTick += 1
-                } label: {
-                    TrackRowView(track: track, isCurrent: isCurrent, isPlaying: isCurrent && player.isPlaying)
+        let visible = sort.sorted(tracks).filtered(by: query)
+        Group {
+            if visible.isEmpty {
+                if query.isEmpty {
+                    ContentUnavailableView("Нет песен", systemImage: "music.note")
+                } else {
+                    ContentUnavailableView.search(text: query)
                 }
-                .buttonStyle(.plain)
-                .listRowInsets(EdgeInsets(top: 6, leading: Theme.Spacing.screen, bottom: 6, trailing: Theme.Spacing.screen))
-                .swipeActions(edge: .trailing) {
-                    Button("Удалить", systemImage: "trash", role: .destructive) {
-                        FileImportService.delete(track, context: modelContext, player: player)
-                    }
-                }
-                .swipeActions(edge: .leading) {
-                    Button("Играть следующим", systemImage: "text.line.first.and.arrowtriangle.forward") {
-                        player.playNext(track)
-                    }
-                    .tint(.gray)
-                }
-                .contextMenu {
-                    Button("Играть следующим", systemImage: "text.line.first.and.arrowtriangle.forward") {
-                        player.playNext(track)
-                    }
-                    Button("Изменить сведения", systemImage: "pencil") { editingTrack = track }
-                    Button("Обновить обложку и текст", systemImage: "arrow.clockwise") {
-                        enrichment.refresh(track, resetArtwork: true)
-                    }
-                    ShareLink(item: track.audioURL) {
-                        Label("Поделиться файлом", systemImage: "square.and.arrow.up")
-                    }
-                    Divider()
-                    Button("Удалить", systemImage: "trash", role: .destructive) {
-                        FileImportService.delete(track, context: modelContext, player: player)
-                    }
-                } preview: {
-                    TrackPreview(track: track)
+            } else {
+                TrackList(tracks: visible)
+            }
+        }
+        .navigationTitle("Песни")
+        .searchable(text: $query, prompt: "Треки, артисты, альбомы")
+        .toolbar {
+            Menu("Сортировка", systemImage: "arrow.up.arrow.down") {
+                Picker("Сортировка", selection: $sort) {
+                    ForEach(LibrarySort.allCases) { Text($0.title).tag($0) }
                 }
             }
         }
-        .listStyle(.plain)
-        .sensoryFeedback(.selection, trigger: selectionTick)
-        .sheet(item: $editingTrack) { EditTrackView(track: $0) }
+    }
+}
+
+struct SectionHeader: View {
+    let title: String
+    init(_ title: String) { self.title = title }
+
+    var body: some View {
+        Text(title)
+            .font(.title3.bold())
+            .foregroundStyle(Theme.Colors.labelPrimary)
+            .textCase(nil)
+            .padding(.top, 8)
+    }
+}
+
+/// Список треков целиком (отдельный экран).
+struct TrackList: View {
+    let tracks: [Track]
+
+    var body: some View {
+        List { TrackRows(tracks: tracks) }
+            .listStyle(.plain)
+    }
+}
+
+/// Строки треков для любого List: воспроизведение, свайпы, контекстное меню, переходы.
+struct TrackRows: View {
+    let tracks: [Track]
+    var queue: [Track]? = nil
+    var numbered = false
+
+    @Environment(AudioPlayerManager.self) private var player
+    @Environment(EnrichmentCoordinator.self) private var enrichment
+    @Environment(AppRouter.self) private var router
+    @Environment(\.modelContext) private var modelContext
+
+    var body: some View {
+        ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
+            let isCurrent = player.currentTrack?.id == track.id
+            Button {
+                if isCurrent {
+                    player.togglePlayPause()
+                } else {
+                    player.play(track, in: queue ?? tracks)
+                }
+            } label: {
+                if numbered {
+                    AlbumTrackRow(index: index + 1, track: track, isCurrent: isCurrent, isPlaying: isCurrent && player.isPlaying)
+                } else {
+                    TrackRowView(track: track, isCurrent: isCurrent, isPlaying: isCurrent && player.isPlaying)
+                }
+            }
+            .buttonStyle(.plain)
+            .listRowInsets(EdgeInsets(top: 6, leading: Theme.Spacing.screen, bottom: 6, trailing: Theme.Spacing.screen))
+            .swipeActions(edge: .trailing) {
+                Button("Удалить", systemImage: "trash", role: .destructive) {
+                    FileImportService.delete(track, context: modelContext, player: player)
+                }
+            }
+            .swipeActions(edge: .leading) {
+                Button("Играть следующим", systemImage: "text.line.first.and.arrowtriangle.forward") {
+                    player.playNext(track)
+                }
+                .tint(.gray)
+            }
+            .contextMenu {
+                TrackMenuItems(track: track, showsDelete: true)
+            } preview: {
+                TrackPreview(track: track)
+            }
+        }
+    }
+}
+
+/// Пункты меню трека — общие для списков и Now Playing.
+struct TrackMenuItems: View {
+    let track: Track
+    var showsDelete = false
+    var showsPlayNext = true
+    var onEdit: (() -> Void)? = nil
+
+    @Environment(AudioPlayerManager.self) private var player
+    @Environment(EnrichmentCoordinator.self) private var enrichment
+    @Environment(AppRouter.self) private var router
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        if showsPlayNext {
+            Button("Играть следующим", systemImage: "text.line.first.and.arrowtriangle.forward") {
+                player.playNext(track)
+            }
+        }
+        if track.hasKnownArtist {
+            Button("Перейти к артисту", systemImage: "music.mic") { router.openArtist(track.artist) }
+        }
+        if let key = track.albumKey {
+            Button("Перейти к альбому", systemImage: "square.stack") { router.openAlbum(key) }
+        }
+        Button("Клип на YouTube", systemImage: "play.rectangle") {
+            openURL(YouTubeLink.search(artist: track.artist, title: track.title))
+        }
+        Divider()
+        Button("Изменить сведения", systemImage: "pencil") {
+            if let onEdit { onEdit() } else { router.editingTrack = track }
+        }
+        Menu("Искать заново", systemImage: "arrow.clockwise") {
+            Button("Обложку и текст") { enrichment.refresh(track, resetArtwork: true, resetLyrics: true) }
+            Button("Только обложку") { enrichment.refresh(track, resetArtwork: true) }
+            Button("Только текст") { enrichment.refresh(track, resetLyrics: true) }
+        }
+        ShareLink(item: track.audioURL) {
+            Label("Поделиться файлом", systemImage: "square.and.arrow.up")
+        }
+        if showsDelete {
+            Divider()
+            Button("Удалить", systemImage: "trash", role: .destructive) {
+                FileImportService.delete(track, context: modelContext, player: player)
+            }
+        }
     }
 }
 

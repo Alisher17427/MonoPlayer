@@ -77,17 +77,20 @@ open MonoPlayer.xcodeproj
 ```
 .github/workflows/  build-ipa.yml — облачная сборка неподписанного IPA + тесты
 MonoPlayer/
-├── App/            MonoPlayerApp (SwiftData, тема), ContentView (TabView + мини-плеер)
-├── Models/         Track (@Model), LyricLine
+├── App/            MonoPlayerApp (SwiftData, тема), ContentView (TabView + мини-плеер),
+│                   AppRouter (вкладки, стек медиатеки, переходы из плеера)
+├── Models/         Track (@Model), LyricLine, LibraryIndex (альбомы и артисты из треков)
 ├── Services/       AudioPlayerManager, FileImportService, MetadataEnricherActor,
-│                   ITunesSearchService, LyricsService (+ LRCParser)
+│                   ITunesSearchService, MetadataSources (Deezer, MusicBrainz, Cover Art Archive),
+│                   LyricsService (LRCLIB + lyrics.ovh, LRCParser), VideoService (клипы, YouTube)
 ├── Utilities/      FilenameSanitizer, ArtworkPalette, TimeFormatting
 ├── DesignSystem/   Theme (токены Graphite), GlassModifiers (Liquid Glass / Material)
 ├── Views/
-│   ├── Library/    LibraryView, TrackRowView, SearchView, EditTrackView
+│   ├── Library/    LibraryView (разделы, песни), AlbumsView, ArtistsView, VideosView,
+│   │               TrackRowView, SearchView, EditTrackView (ручной выбор обложки и текста)
 │   ├── Player/     MiniPlayerView, FullPlayerView, ScrubberView,
 │   │               NowPlayingBackground, SyncedLyricsView
-│   ├── Components/ ArtworkView (+ ArtworkLoader)
+│   ├── Components/ ArtworkView (+ ArtworkLoader), MediaCards (альбом, артист, клип)
 │   └── Settings/   SettingsView
 └── Resources/      Assets.xcassets (иконка: светлая, тёмная, tinted)
 MonoPlayerTests/    Swift Testing: санитайзер имён, LRC-парсер, сопоставление iTunes
@@ -99,8 +102,10 @@ MonoPlayerTests/    Swift Testing: санитайзер имён, LRC-парсе
    название сразу берётся из имени файла через `FilenameSanitizer`, трек появляется в
    медиатеке и может играть немедленно.
 2. **Обогащение** (`EnrichmentCoordinator` → `MetadataEnricherActor`) — по одному треку:
-   встроенные теги → iTunes (канонические данные и обложка 1000×1000 в
-   `Documents/Artwork/{UUID}.jpg`) → палитра обложки → LRCLIB (`/api/get`, затем `/api/search`).
+   встроенные теги → iTunes → Deezer → MusicBrainz/Cover Art Archive (по нескольким вариантам
+   названия: без «feat.», «Remastered», скобок) → палитра обложки → текст: LRCLIB `/api/get`,
+   затем `/api/search` с выбором записи по длительности (±3 с — иначе тайминги разъедутся),
+   запасной обычный текст — lyrics.ovh. Ручные правки (`metadataLocked`) автопоиск не трогает.
    Актор не трогает SwiftData: он возвращает `EnrichmentResult`, который применяется к
    модели на главном акторе.
 3. **Статусы:** `.completed` — есть обложка и текст; `.partial` — чего-то не нашлось;

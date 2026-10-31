@@ -62,3 +62,51 @@ struct ITunesMatchTests {
         #expect(hit.hdArtworkURL?.absoluteString.hasSuffix("1000x1000bb.jpg") == true)
     }
 }
+
+struct SearchQueryTests {
+    @Test func titleVariantsStripDecorations() {
+        #expect(SearchQuery.titleVariants("Song (feat. X) [Remastered 2011]") == ["Song (feat. X) [Remastered 2011]", "Song (feat. X)", "Song"])
+        #expect(SearchQuery.titleVariants("Song - Remastered 2011") == ["Song - Remastered 2011", "Song"])
+        #expect(SearchQuery.titleVariants("Hello") == ["Hello"])
+    }
+
+    @Test func primaryArtistDropsFeaturing() {
+        #expect(SearchQuery.primaryArtist("Artist feat. Other") == "Artist")
+        #expect(SearchQuery.primaryArtist("Artist (feat. Other)") == "Artist")
+        #expect(SearchQuery.primaryArtist("Daft Punk ft. Pharrell") == "Daft Punk")
+        #expect(SearchQuery.primaryArtist("Simon & Garfunkel") == "Simon & Garfunkel")
+        #expect(SearchQuery.primaryArtist("Featherweight") == "Featherweight")
+    }
+
+    @Test func matchesIgnoringEditions() {
+        #expect(SearchQuery.matches(title: "Get Lucky (feat. Pharrell Williams) - Radio Edit", artist: "Daft Punk",
+                                    wantedTitle: "Get Lucky", wantedArtist: "Daft Punk feat. Pharrell"))
+        #expect(!SearchQuery.matches(title: "Get Lucky", artist: "Someone Else", wantedTitle: "Get Lucky", wantedArtist: "Daft Punk"))
+    }
+}
+
+struct LyricsSelectionTests {
+    private func candidate(_ duration: TimeInterval, synced: Bool) -> LyricsCandidate {
+        LyricsCandidate(source: "LRCLIB", trackName: "Song", artistName: "Artist", albumName: nil, duration: duration,
+                        plainLyrics: "text", syncedLyrics: synced ? "[00:01.00]text" : nil)
+    }
+
+    @Test func prefersSyncedWithMatchingDuration() {
+        let live = candidate(250, synced: true), studio = candidate(201, synced: true), plain = candidate(200, synced: false)
+        let best = LyricsService.pickBest([live, plain, studio], duration: 200, wantedTitle: "Song", wantedArtist: "Artist")
+        #expect(best?.id == studio.id)
+    }
+
+    @Test func rejectsSyncedOfDifferentVersion() {
+        let live = candidate(250, synced: true), plain = candidate(200, synced: false)
+        let best = LyricsService.pickBest([live, plain], duration: 200, wantedTitle: "Song", wantedArtist: "Artist")
+        #expect(best?.id == plain.id)
+    }
+
+    @Test func parsesOffsetAndWordTimestamps() {
+        let lines = LRCParser.parse("[offset:+500]\n[00:02.00]<00:02.00>Hello <00:02.50>world")
+        #expect(lines.count == 1)
+        #expect(lines.first?.text == "Hello world")
+        #expect(lines.first?.time == 1.5)
+    }
+}

@@ -6,7 +6,9 @@ import SwiftUI
 struct FullPlayerView: View {
     @Environment(AudioPlayerManager.self) private var player
     @Environment(EnrichmentCoordinator.self) private var enrichment
+    @Environment(AppRouter.self) private var router
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     @State private var showLyrics = false
@@ -19,7 +21,7 @@ struct FullPlayerView: View {
         Group {
             if let track = player.currentTrack {
                 content(for: track)
-                    .task(id: "\(track.id)-\(track.syncedLyricsRaw?.count ?? 0)") {
+                    .task(id: "\(track.id)-\(track.syncedLyricsRaw?.hashValue ?? 0)") {
                         lyricLines = LRCParser.parse(track.syncedLyricsRaw)
                     }
             } else {
@@ -34,22 +36,28 @@ struct FullPlayerView: View {
 
     private func content(for track: Track) -> some View {
         GeometryReader { geo in
-            let artworkSide = max(120, min(geo.size.width - Theme.Spacing.player * 2, geo.size.height * 0.42))
+            let artworkSide = max(120, min(geo.size.width - Theme.Spacing.player * 2, geo.size.height * 0.40))
 
             VStack(spacing: 0) {
                 if showLyrics {
                     compactHeader(track)
                         .padding(.top, 28)
-                    SyncedLyricsView(lines: lyricLines, plainLyrics: track.plainLyrics)
-                        .frame(maxHeight: .infinity)
-                        .mask(
-                            LinearGradient(
-                                stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.06),
-                                        .init(color: .black, location: 0.9), .init(color: .clear, location: 1)],
-                                startPoint: .top, endPoint: .bottom
-                            )
+                    SyncedLyricsView(
+                        lines: lyricLines,
+                        plainLyrics: track.plainLyrics,
+                        offset: track.lyricsOffset,
+                        isSearching: track.isEnriching,
+                        onFindLyrics: { editingTrack = track }
+                    )
+                    .frame(maxHeight: .infinity)
+                    .mask(
+                        LinearGradient(
+                            stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.06),
+                                    .init(color: .black, location: 0.9), .init(color: .clear, location: 1)],
+                            startPoint: .top, endPoint: .bottom
                         )
-                        .transition(.opacity)
+                    )
+                    .transition(.opacity)
                 } else {
                     Spacer(minLength: 28)
                     ArtworkView(
@@ -67,7 +75,7 @@ struct FullPlayerView: View {
                         .padding(.horizontal, Theme.Spacing.player)
                 }
 
-                VStack(spacing: dynamicTypeSize.isAccessibilitySize ? 16 : 20) {
+                VStack(spacing: dynamicTypeSize.isAccessibilitySize ? 16 : 18) {
                     ScrubberView()
                     TransportControls()
                     VolumeSlider()
@@ -93,9 +101,10 @@ struct FullPlayerView: View {
                 .matchedGeometryEffect(id: "artwork", in: artworkSpace)
             VStack(alignment: .leading, spacing: 2) {
                 Text(track.title).font(.headline).lineLimit(1)
-                Text(track.artist).font(.subheadline).foregroundStyle(.white.opacity(0.6)).lineLimit(1)
+                artistButton(track, font: .subheadline)
             }
             Spacer()
+            if !lyricLines.isEmpty { syncMenu(track) }
             trackMenu(track)
         }
         .padding(.horizontal, Theme.Spacing.player)
@@ -106,22 +115,65 @@ struct FullPlayerView: View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 MarqueeText(text: track.title, font: .title3.weight(.semibold))
-                MarqueeText(text: track.artist, font: .title3)
-                    .foregroundStyle(.white.opacity(0.6))
+                artistButton(track, font: .title3)
+                if let key = track.albumKey {
+                    Button {
+                        router.openAlbum(key)
+                    } label: {
+                        MarqueeText(text: key.title, font: .subheadline)
+                            .foregroundStyle(.white.opacity(0.45))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Альбом \(key.title)")
+                    .accessibilityHint("Открыть страницу альбома")
+                }
             }
             trackMenu(track)
         }
     }
 
+    /// Имя артиста — кнопка: закрывает плеер и открывает страницу исполнителя.
+    private func artistButton(_ track: Track, font: Font) -> some View {
+        Button {
+            if track.hasKnownArtist { router.openArtist(track.artist) }
+        } label: {
+            MarqueeText(text: track.artist, font: font)
+                .foregroundStyle(.white.opacity(0.65))
+        }
+        .buttonStyle(.plain)
+        .disabled(!track.hasKnownArtist)
+        .accessibilityLabel("Артист \(track.artist)")
+        .accessibilityHint("Открыть страницу артиста")
+    }
+
+    /// Подстройка синхронизации текста (сохраняется для трека).
+    private func syncMenu(_ track: Track) -> some View {
+        Menu {
+            Section("Синхронизация: \(Self.offsetLabel(track.lyricsOffset))") {
+                Button("Текст раньше на 0,5 с", systemImage: "backward") { track.lyricsOffset += 0.5 }
+                Button("Текст позже на 0,5 с", systemImage: "forward") { track.lyricsOffset -= 0.5 }
+                if track.lyricsOffset != 0 {
+                    Button("Сбросить", systemImage: "arrow.uturn.backward") { track.lyricsOffset = 0 }
+                }
+            }
+            Button("Найти другой текст", systemImage: "magnifyingglass") { editingTrack = track }
+        } label: {
+            Image(systemName: "timer")
+                .font(.title3)
+                .frame(width: Theme.Size.minTapTarget, height: Theme.Size.minTapTarget)
+        }
+        .accessibilityLabel("Синхронизация текста")
+    }
+
+    static func offsetLabel(_ offset: TimeInterval) -> String {
+        if offset == 0 { return "как есть" }
+        let value = String(format: "%.1f", abs(offset)).replacingOccurrences(of: ".", with: ",")
+        return offset > 0 ? "раньше на \(value) с" : "позже на \(value) с"
+    }
+
     private func trackMenu(_ track: Track) -> some View {
         Menu {
-            Button("Изменить сведения", systemImage: "pencil") { editingTrack = track }
-            Button("Обновить обложку и текст", systemImage: "arrow.clockwise") {
-                enrichment.refresh(track, resetArtwork: true)
-            }
-            ShareLink(item: track.audioURL) {
-                Label("Поделиться файлом", systemImage: "square.and.arrow.up")
-            }
+            TrackMenuItems(track: track, showsPlayNext: false, onEdit: { editingTrack = track })
         } label: {
             Image(systemName: "ellipsis.circle.fill")
                 .symbolRenderingMode(.hierarchical)
@@ -142,6 +194,17 @@ struct FullPlayerView: View {
             }
             .accessibilityLabel(showLyrics ? "Скрыть текст" : "Показать текст")
             .sensoryFeedback(.selection, trigger: showLyrics)
+
+            Spacer()
+            Button {
+                player.pause()
+                openURL(YouTubeLink.search(artist: track.artist, title: track.title))
+            } label: {
+                Image(systemName: "play.rectangle")
+                    .font(.title3)
+                    .frame(width: Theme.Size.minTapTarget, height: Theme.Size.minTapTarget)
+            }
+            .accessibilityLabel("Клип на YouTube")
 
             Spacer()
             AirPlayButton()

@@ -21,21 +21,24 @@ struct TrackRowView: View {
                     cornerRadius: Theme.Radius.rowArtwork,
                     isLoading: track.isEnriching
                 )
-                if isCurrent {
+                // Волна — только пока трек действительно играет; на паузе исчезает
+                if isCurrent && isPlaying {
                     RoundedRectangle(cornerRadius: Theme.Radius.rowArtwork, style: .continuous)
                         .fill(.black.opacity(0.4))
                     Image(systemName: "waveform")
                         .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(.white)
-                        .symbolEffect(.variableColor.iterative, isActive: isPlaying)
+                        .symbolEffect(.variableColor.iterative, isActive: true)
+                        .transition(.opacity)
                 }
             }
             .frame(width: Theme.Size.rowArtwork, height: Theme.Size.rowArtwork)
+            .animation(.easeInOut(duration: 0.2), value: isCurrent && isPlaying)
 
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(track.title)
-                        .font(.body)
+                        .font(isCurrent ? .body.weight(.semibold) : .body)
                         .foregroundStyle(Theme.Colors.labelPrimary)
                         .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 1)
                     Text(subtitle)
@@ -76,5 +79,45 @@ struct TrackRowView: View {
         case .completed, .partial:
             EmptyView()
         }
+    }
+}
+
+/// Строка трека внутри альбома: номер вместо обложки.
+struct AlbumTrackRow: View {
+    let index: Int
+    let track: Track
+    let isCurrent: Bool
+    let isPlaying: Bool
+
+    var body: some View {
+        HStack(spacing: 14) {
+            ZStack {
+                if isCurrent && isPlaying {
+                    Image(systemName: "waveform")
+                        .font(.subheadline.weight(.semibold))
+                        .symbolEffect(.variableColor.iterative, isActive: true)
+                } else {
+                    Text("\(index)")
+                        .font(.body.monospacedDigit())
+                        .foregroundStyle(Theme.Colors.labelSecondary)
+                }
+            }
+            .frame(width: 28)
+
+            Text(track.title)
+                .font(isCurrent ? .body.weight(.semibold) : .body)
+                .lineLimit(2)
+            Spacer(minLength: 8)
+            if track.duration > 0 {
+                Text(track.duration.playbackTime)
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(Theme.Colors.labelSecondary)
+            }
+        }
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(index). \(track.title), \(track.duration.playbackTime)")
+        .accessibilityAddTraits(.isButton)
     }
 }

@@ -2,35 +2,69 @@ import SwiftUI
 
 /// Караоке-текст: активная строка на 1/3 высоты, остальные приглушены и слегка размыты.
 /// Ручной скролл ставит автоскролл на паузу на 3 секунды, тап по строке — перемотка.
+/// Если синхронизированного текста нет — показывается обычный с подсказкой найти другой.
 struct SyncedLyricsView: View {
     let lines: [LyricLine]
     let plainLyrics: String?
+    var offset: TimeInterval = 0
+    var isSearching = false
+    var onFindLyrics: () -> Void = {}
 
     var body: some View {
         if !lines.isEmpty {
-            SyncedLines(lines: lines)
+            SyncedLines(lines: lines, offset: offset)
         } else if let plainLyrics, !plainLyrics.isEmpty {
             ScrollView {
-                Text(plainLyrics)
-                    .font(.title2.bold())
-                    .lineSpacing(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, Theme.Spacing.player)
-                    .padding(.vertical, 24)
+                VStack(alignment: .leading, spacing: 20) {
+                    notice
+                    Text(plainLyrics)
+                        .font(.title2.bold())
+                        .lineSpacing(8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.horizontal, Theme.Spacing.player)
+                .padding(.vertical, 24)
             }
             .scrollIndicators(.hidden)
+        } else if isSearching {
+            VStack(spacing: 12) {
+                ProgressView()
+                Text("Ищем текст…").foregroundStyle(.white.opacity(0.6))
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            ContentUnavailableView(
-                "Текст недоступен",
-                systemImage: "quote.bubble",
-                description: Text("Для этого трека не нашлось текста на LRCLIB.")
-            )
+            ContentUnavailableView {
+                Label("Текст недоступен", systemImage: "quote.bubble")
+            } description: {
+                Text("Автопоиск не нашёл текст этого трека.")
+            } actions: {
+                Button("Найти вручную", action: onFindLyrics)
+                    .buttonStyle(.bordered)
+            }
         }
+    }
+
+    /// Найден только обычный текст — синхронизировать его не с чем.
+    private var notice: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "text.alignleft")
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Синхронизированный текст не найден — показан обычный.")
+                    .font(.subheadline)
+                Button("Найти синхронизированный", action: onFindLyrics)
+                    .font(.subheadline.weight(.semibold))
+            }
+        }
+        .foregroundStyle(.white.opacity(0.75))
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
 private struct SyncedLines: View {
     let lines: [LyricLine]
+    let offset: TimeInterval
 
     @Environment(AudioPlayerManager.self) private var player
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -38,9 +72,11 @@ private struct SyncedLines: View {
     @State private var resumeTask: Task<Void, Never>?
     @State private var tapTick = 0
 
+    /// Небольшое опережение, чтобы строка подсвечивалась вместе с голосом, плюс ручная подстройка.
+    private var lyricsTime: TimeInterval { player.currentTime + 0.15 + offset }
+
     private var activeIndex: Int? {
-        // Небольшое опережение, чтобы строка подсвечивалась вместе с голосом
-        lines.lastIndex { $0.time <= player.currentTime + 0.15 }
+        lines.lastIndex { $0.time <= lyricsTime }
     }
 
     var body: some View {
@@ -54,7 +90,7 @@ private struct SyncedLines: View {
                                 .id(index)
                                 .onTapGesture {
                                     tapTick += 1
-                                    player.seek(to: line.time)
+                                    player.seek(to: max(0, line.time - offset))
                                     if !player.isPlaying { player.play() }
                                     resumeAutoScroll(proxy: proxy, immediately: true)
                                 }

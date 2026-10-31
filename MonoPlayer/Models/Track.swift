@@ -25,9 +25,14 @@ final class Track {
     // Тексты песен
     var plainLyrics: String?
     var syncedLyricsRaw: String? // Исходный LRC формат
+    /// Ручная подстройка синхронизации: > 0 — строки подсвечиваются раньше
+    var lyricsOffset: TimeInterval = 0
 
     // Доминантные цвета обложки ("RRGGBB,RRGGBB,RRGGBB") для фона Now Playing
     var paletteHex: String?
+
+    /// Пользователь правил название/артиста/альбом вручную — автопоиск их больше не перезаписывает
+    var metadataLocked: Bool = false
 
     // Системные поля
     var dateAdded: Date
@@ -58,4 +63,12 @@ extension Track {
     var isEnriching: Bool { enrichmentStatus == .pending || enrichmentStatus == .enriching }
 
     var hasLyrics: Bool { syncedLyricsRaw != nil || plainLyrics != nil }
+
+    /// Основной артист без «feat. …» — по нему группируются страницы артистов и альбомов.
+    var primaryArtist: String { SearchQuery.primaryArtist(artist) }
+
+    var albumKey: AlbumKey? {
+        guard let album, !album.isEmpty else { return nil }
+        return AlbumKey(title: album, artist: primaryArtist)
+    }
 }

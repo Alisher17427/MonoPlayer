@@ -5,6 +5,7 @@ struct ITunesTrack: Decodable, Sendable {
     let artistName: String?
     let collectionName: String?
     let artworkUrl100: String?
+    var trackTimeMillis: Int? = nil
 
     /// artworkUrl100 → 1000x1000bb.jpg
     var hdArtworkURL: URL? {
@@ -34,6 +35,16 @@ enum ITunesSearchService {
         return try JSONDecoder().decode(Response.self, from: data).results
     }
 
+    static func candidates(artist: String?, title: String) async throws -> [MetadataCandidate] {
+        try await search(artist: artist, title: title).compactMap { hit in
+            guard let name = hit.trackName else { return nil }
+            return MetadataCandidate(
+                source: .iTunes, title: name, artist: hit.artistName ?? "", album: hit.collectionName,
+                artworkURL: hit.hdArtworkURL, duration: hit.trackTimeMillis.map { TimeInterval($0) / 1000 }
+            )
+        }
+    }
+
     /// Лучшее совпадение: название должно совпадать (с точностью до регистра/пунктуации),
     /// артист — если он известен.
     static func bestMatch(in results: [ITunesTrack], artist: String?, title: String) -> ITunesTrack? {
@@ -49,14 +60,7 @@ enum ITunesSearchService {
         }
     }
 
-    static func normalize(_ text: String) -> String {
-        text.lowercased()
-            .folding(options: [.diacriticInsensitive], locale: nil)
-            .unicodeScalars
-            .filter { CharacterSet.alphanumerics.contains($0) }
-            .map(String.init)
-            .joined()
-    }
+    static func normalize(_ text: String) -> String { SearchQuery.normalize(text) }
 
     static func downloadData(from url: URL) async throws -> Data {
         let (data, response) = try await URLSession.shared.data(from: url)

@@ -52,12 +52,15 @@ enum ArtworkLoader {
     private static let cache = Cache()
 
     static func image(named fileName: String, maxPixelSize: CGFloat) async -> UIImage? {
+        await image(at: Storage.artworkURL(fileName), cacheKey: fileName, maxPixelSize: maxPixelSize)
+    }
+
+    static func image(at url: URL, cacheKey: String? = nil, maxPixelSize: CGFloat) async -> UIImage? {
         // Корзины размеров, чтобы не плодить копии в кэше
         let bucket = maxPixelSize <= 200 ? 200 : (maxPixelSize <= 700 ? 700 : 1400)
-        let key = "\(fileName)#\(bucket)" as NSString
+        let key = "\(cacheKey ?? url.path())#\(bucket)" as NSString
         if let cached = cache.storage.object(forKey: key) { return cached }
 
-        let url = Storage.artworkURL(fileName)
         let image = await Task.detached(priority: .userInitiated) { () -> UIImage? in
             guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
             let options: [CFString: Any] = [
