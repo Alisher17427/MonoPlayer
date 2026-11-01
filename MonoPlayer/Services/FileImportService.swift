@@ -48,6 +48,16 @@ enum FileImportService {
         return imported
     }
 
+    /// Файлы, которые система положила в Inbox через «Поделиться», но не передала в `onOpenURL`:
+    /// при отправке нескольких файлов сразу приложение получает ссылку только на один.
+    static func pendingInboxFiles() -> [URL] {
+        let inbox = URL.documentsDirectory.appending(path: "Inbox", directoryHint: .isDirectory)
+        let files = (try? FileManager.default.contentsOfDirectory(at: inbox, includingPropertiesForKeys: nil)) ?? []
+        return files
+            .filter { supportedExtensions.contains($0.pathExtension.lowercased()) }
+            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+    }
+
     @MainActor
     private static func importFile(_ url: URL, into context: ModelContext) throws -> Track {
         let accessing = url.startAccessingSecurityScopedResource()

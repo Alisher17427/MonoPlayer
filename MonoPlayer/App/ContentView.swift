@@ -6,6 +6,7 @@ struct ContentView: View {
     @Environment(AudioPlayerManager.self) private var player
     @Environment(EnrichmentCoordinator.self) private var enrichment
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var router = AppRouter()
     @State private var media = ArtistMediaStore()
@@ -29,16 +30,29 @@ struct ContentView: View {
             .task {
                 Storage.prepare()
                 enrichment.attach(modelContext)
+                importInbox()
             }
-            // Импорт через «Поделиться» / «Открыть в…»
+            // Импорт через «Поделиться» / «Открыть в…»: вместе с присланным — всё, что ждёт в Inbox
             .onOpenURL { url in
-                FileImportService.importFiles([url], into: modelContext, enrichment: enrichment)
+                let others = FileImportService.pendingInboxFiles().filter { $0.standardizedFileURL != url.standardizedFileURL }
+                FileImportService.importFiles([url] + others, into: modelContext, enrichment: enrichment)
                 router.selectedTab = .library
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { importInbox() }
             }
             // Обогащение завершилось для играющего трека — обновляем экран блокировки
             .onChange(of: nowPlayingSignature) {
                 player.updateNowPlayingInfo()
             }
+    }
+
+    /// Файлы из «Поделиться», до которых не дошёл `onOpenURL`.
+    private func importInbox() {
+        let pending = FileImportService.pendingInboxFiles()
+        guard !pending.isEmpty else { return }
+        FileImportService.importFiles(pending, into: modelContext, enrichment: enrichment)
+        router.selectedTab = .library
     }
 
     private var nowPlayingSignature: String {
