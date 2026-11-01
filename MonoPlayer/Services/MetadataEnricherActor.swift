@@ -12,11 +12,16 @@ struct EnrichmentInput: Sendable {
     let duration: TimeInterval
     let hasArtwork: Bool
     let hasSyncedLyrics: Bool
+    let hasLyrics: Bool
     let lyricsLocked: Bool
     let metadataLocked: Bool
+    let artworkLocked: Bool
+    /// Искать обложку / текст заново, даже если они уже есть (старые заменяются, только если найдены новые)
+    let forceArtwork: Bool
+    let forceLyrics: Bool
 
     @MainActor
-    init(_ track: Track) {
+    init(_ track: Track, forceArtwork: Bool = false, forceLyrics: Bool = false) {
         id = track.id
         audioURL = track.audioURL
         title = track.title
@@ -25,8 +30,12 @@ struct EnrichmentInput: Sendable {
         duration = track.duration
         hasArtwork = track.artworkFileName != nil
         hasSyncedLyrics = track.syncedLyricsRaw != nil
+        hasLyrics = track.hasLyrics
         lyricsLocked = track.lyricsLocked
         metadataLocked = track.metadataLocked
+        artworkLocked = track.artworkLocked
+        self.forceArtwork = forceArtwork
+        self.forceLyrics = forceLyrics
     }
 }
 
@@ -41,6 +50,8 @@ struct EnrichmentResult: Sendable {
     var paletteHex: String?
     var plainLyrics: String?
     var syncedLyricsRaw: String?
+    /// Нашёлся только обычный текст — прежний синхронный остаётся
+    var keepsSyncedLyrics = false
     var status: EnrichmentStatus = .partial
 }
 
@@ -65,7 +76,9 @@ actor MetadataEnricherActor {
             if let value = local.albumArtist { result.albumArtist = value }
         }
         if let value = local.duration { duration = value; result.duration = value }
-        if !input.hasArtwork { artworkData = local.artworkData }
+        // Своя обложка пользователя не заменяется; при обновлении старая остаётся, пока не найдена новая
+        let wantsArtwork = !input.artworkLocked && (!input.hasArtwork || input.forceArtwork)
+        if wantsArtwork { artworkData = local.artworkData }
 
         // В запросах — первый исполнитель: «rocket, lildrughill» ищем как «rocket»
         var queryArtist: String? { artist.flatMap { SearchQuery.splitArtists($0).first } ?? artist }
@@ -74,7 +87,7 @@ actor MetadataEnricherActor {
         let search = await GeniusService.bestMatch(artist: queryArtist, title: title)
         if let song = search.song {
             let needsAlbum = album == nil && !locked
-            let needsArtwork = artworkData == nil && !input.hasArtwork
+            let needsArtwork = artworkData == nil && wantsArtwork
             var details: (album: String?, artworkURL: URL?)?
             if needsAlbum || needsArtwork { details = try? await GeniusService.details(of: song) }
             if !locked {
@@ -92,15 +105,16 @@ actor MetadataEnricherActor {
             if result.artworkFileName != nil { result.paletteHex = ArtworkPalette.extractHex(from: artworkData) }
         }
 
-        // Шаг 4: текст песни (синхронный или выбранный вручную текст не трогаем)
-        let keepsLyrics = input.hasSyncedLyrics || input.lyricsLocked
-        var lyricsFound = keepsLyrics
+        // Шаг 4: текст песни (выбранный вручную не трогаем; синхронный — только при обновлении)
+        let keepsLyrics = input.lyricsLocked || (input.hasSyncedLyrics && !input.forceLyrics)
+        var lyricsFound = keepsLyrics || (input.forceLyrics && input.hasLyrics)
         var lyricsFailed = false
         if !keepsLyrics {
             do {
                 if let lyrics = try await LyricsService.find(artist: queryArtist, title: title, album: album, duration: duration, genius: search.song) {
                     result.plainLyrics = lyrics.plainLyrics
                     result.syncedLyricsRaw = lyrics.syncedLyrics
+                    result.keepsSyncedLyrics = lyrics.syncedLyrics == nil && input.hasSyncedLyrics
                     lyricsFound = true
                 }
             } catch {
@@ -136,10 +150,21 @@ actor MetadataEnricherActor {
 @MainActor
 @Observable
 final class EnrichmentCoordinator {
+    private struct QueueItem {
+        let track: Track
+        var forceArtwork: Bool
+        var forceLyrics: Bool
+    }
+
     @ObservationIgnored private let enricher = MetadataEnricherActor()
-    @ObservationIgnored private var queue: [Track] = []
+    @ObservationIgnored private var queue: [QueueItem] = []
     @ObservationIgnored private var isRunning = false
+    @ObservationIgnored private var inFlight = false
     @ObservationIgnored private var context: ModelContext?
+
+    /// Прогресс текущей очереди: сколько треков осталось и сколько было всего.
+    private(set) var remaining = 0
+    private(set) var batchTotal = 0
 
     /// Вызывается при старте: подхватывает треки, обогащение которых было прервано.
     func attach(_ context: ModelContext) {
@@ -150,17 +175,54 @@ final class EnrichmentCoordinator {
         enqueue(unfinished)
     }
 
-    func enqueue(_ tracks: [Track]) {
-        for track in tracks where !queue.contains(where: { $0.id == track.id }) {
+    func enqueue(_ tracks: [Track], forceArtwork: Bool = false, forceLyrics: Bool = false) {
+        for track in tracks {
+            if let index = queue.firstIndex(where: { $0.track.id == track.id }) {
+                queue[index].forceArtwork = queue[index].forceArtwork || forceArtwork
+                queue[index].forceLyrics = queue[index].forceLyrics || forceLyrics
+                continue
+            }
             track.enrichmentStatus = .enriching
-            queue.append(track)
+            queue.append(QueueItem(track: track, forceArtwork: forceArtwork, forceLyrics: forceLyrics))
+            batchTotal += 1
         }
+        updateProgress()
         runIfNeeded()
+    }
+
+    /// Вся медиатека: найти заново обложки и/или тексты. Старые заменяются, только если найдены новые;
+    /// поставленные вручную обложки и тексты не трогаются. Метаданные из тегов и Genius обновляются всегда.
+    func refreshLibrary(_ tracks: [Track], artwork: Bool, lyrics: Bool) {
+        enqueue(tracks.sorted { $0.dateAdded < $1.dateAdded }, forceArtwork: artwork, forceLyrics: lyrics)
+    }
+
+    /// Только треки без обложки или без текста. Возвращает, сколько треков поставлено в очередь.
+    @discardableResult
+    func fillMissing(_ tracks: [Track]) -> Int {
+        let missing = tracks
+            .filter { ($0.artworkFileName == nil && !$0.artworkLocked) || (!$0.hasLyrics && !$0.lyricsLocked) }
+            .sorted { $0.dateAdded < $1.dateAdded }
+        enqueue(missing)
+        return missing.count
+    }
+
+    /// Остановить очередь: трек, который уже обрабатывается, будет доведён до конца.
+    func cancelQueue() {
+        for item in queue where !item.track.isDeleted {
+            let track = item.track
+            track.enrichmentStatus = track.artworkFileName != nil && track.hasLyrics ? .completed : .partial
+        }
+        queue.removeAll()
+        try? context?.save()
+        updateProgress()
     }
 
     /// Повторный автопоиск. `resetArtwork` / `resetLyrics` — искать заново, даже если уже есть.
     func refresh(_ track: Track, resetArtwork: Bool = false, resetLyrics: Bool = false) {
-        if resetArtwork { removeArtwork(of: track) }
+        if resetArtwork {
+            removeArtwork(of: track)
+            track.artworkLocked = false
+        }
         if resetLyrics {
             track.plainLyrics = nil
             track.syncedLyricsRaw = nil
@@ -183,6 +245,7 @@ final class EnrichmentCoordinator {
         removeArtwork(of: track)
         track.artworkFileName = fileName
         track.paletteHex = ArtworkPalette.extractHex(from: data)
+        track.artworkLocked = true
         try? context?.save()
         return true
     }
@@ -219,6 +282,7 @@ final class EnrichmentCoordinator {
 
     func clearArtwork(of track: Track) {
         removeArtwork(of: track)
+        track.artworkLocked = true
         try? context?.save()
     }
 
@@ -233,15 +297,35 @@ final class EnrichmentCoordinator {
         isRunning = true
         Task {
             while !queue.isEmpty {
-                let track = queue.removeFirst()
+                let item = queue.removeFirst()
+                let track = item.track
+                inFlight = true
+                defer {
+                    inFlight = false
+                    updateProgress()
+                }
                 guard !track.isDeleted, track.modelContext != nil else { continue }
-                let result = await enricher.enrich(EnrichmentInput(track))
-                guard !track.isDeleted, track.modelContext != nil else { continue }
+                let input = EnrichmentInput(track, forceArtwork: item.forceArtwork, forceLyrics: item.forceLyrics)
+                let result = await enricher.enrich(input)
+                guard !track.isDeleted, track.modelContext != nil else {
+                    discardArtworkFile(result.artworkFileName)
+                    continue
+                }
                 apply(result, to: track)
                 try? context?.save()
             }
             isRunning = false
         }
+    }
+
+    private func updateProgress() {
+        remaining = queue.count + (inFlight ? 1 : 0)
+        if remaining == 0 { batchTotal = 0 }
+    }
+
+    private func discardArtworkFile(_ fileName: String?) {
+        guard let fileName else { return }
+        try? FileManager.default.removeItem(at: Storage.artworkURL(fileName))
     }
 
     private func apply(_ result: EnrichmentResult, to track: Track) {
@@ -252,11 +336,22 @@ final class EnrichmentCoordinator {
             if let value = result.albumArtist { track.albumArtist = value }
         }
         if let value = result.duration { track.duration = value }
-        if let value = result.artworkFileName, track.artworkFileName == nil { track.artworkFileName = value }
-        if let value = result.paletteHex, track.paletteHex == nil { track.paletteHex = value }
-        if result.plainLyrics != nil || result.syncedLyricsRaw != nil {
+        if let value = result.artworkFileName {
+            // Пока шёл поиск, пользователь мог поставить свою обложку — тогда найденная не нужна
+            if track.artworkLocked {
+                discardArtworkFile(value)
+            } else {
+                removeArtwork(of: track)
+                track.artworkFileName = value
+                track.paletteHex = result.paletteHex
+            }
+        }
+        if !track.lyricsLocked, result.plainLyrics != nil || result.syncedLyricsRaw != nil {
             track.plainLyrics = result.plainLyrics
-            track.syncedLyricsRaw = result.syncedLyricsRaw
+            if !result.keepsSyncedLyrics, track.syncedLyricsRaw != result.syncedLyricsRaw {
+                track.syncedLyricsRaw = result.syncedLyricsRaw
+                track.lyricsOffset = 0
+            }
         }
         track.enrichmentStatus = result.status
     }

@@ -32,6 +32,9 @@ final class Track {
     /// Текст выбран или написан вручную — автопоиск его больше не заменяет
     var lyricsLocked: Bool = false
 
+    /// Обложка поставлена или убрана вручную — автопоиск её больше не заменяет
+    var artworkLocked: Bool = false
+
     // Доминантные цвета обложки ("RRGGBB,RRGGBB,RRGGBB") для фона Now Playing
     var paletteHex: String?
 
