@@ -91,7 +91,9 @@ actor MetadataEnricherActor {
             var details: (album: String?, artworkURL: URL?)?
             if needsAlbum || needsArtwork { details = try? await GeniusService.details(of: song) }
             if !locked {
-                if local.title == nil { title = song.title; result.title = song.title }
+                // Название с Genius чище тегового: в тегах бывают «(Official Video)», «[Free DL]» и т.п.
+                let cleanTitle = GeniusService.preferredTitle(genius: song.title, tagged: title)
+                if cleanTitle != title { title = cleanTitle; result.title = cleanTitle }
                 if artist == nil, !song.artist.isEmpty { artist = song.artist; result.artist = song.artist }
                 if album == nil, let value = details?.album { album = value; result.album = value }
             }

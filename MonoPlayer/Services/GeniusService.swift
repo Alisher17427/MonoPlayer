@@ -207,6 +207,43 @@ enum GeniusService {
         return text as String
     }
 
+    // MARK: - Название
+
+    /// Пометки версии трека, которые нельзя терять при замене названия.
+    private static let versionKeywords = [
+        "remix", "rmx", "mix", "live", "acoustic", "unplugged", "slowed", "sped up", "speed up", "reverb",
+        "nightcore", "instrumental", "karaoke", "acapella", "a cappella", "cover", "demo", "edit", "version",
+        "extended", "bass boosted", "ремикс", "лайв", "акустика", "версия", "кавер", "инструментал",
+    ]
+
+    /// Название трека для записи: с Genius, без мусора из тегов («(Official Video)», «[Free DL]», «prod. by …»).
+    /// Пометки версии из тегов («(Slowed + Reverb)», «- Remix») сохраняются, если у Genius их нет.
+    /// Если Genius-название длиннее и не входит в теговое («Love» → «Love Story») — остаётся теговое.
+    static func preferredTitle(genius: String, tagged: String) -> String {
+        let geniusBase = SearchQuery.normalize(SearchQuery.titleVariants(genius).last ?? genius)
+        guard !geniusBase.isEmpty, SearchQuery.normalize(tagged).contains(geniusBase) else { return tagged }
+
+        let geniusNormalized = SearchQuery.normalize(genius)
+        var result = genius
+        for marker in versionMarkers(in: tagged) where !geniusNormalized.contains(SearchQuery.normalize(marker)) {
+            result += " (\(marker))"
+        }
+        return result
+    }
+
+    /// "Song (Slowed + Reverb) [Free DL] - Live" → ["Slowed + Reverb", "Live"]
+    private static func versionMarkers(in title: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: "\\(([^)]*)\\)|\\[([^\\]]*)\\]|\\s[-–—]\\s+([^()\\[\\]]+)$") else { return [] }
+        let source = title as NSString
+        return regex.matches(in: title, range: NSRange(location: 0, length: source.length)).compactMap { match in
+            let group = (1...3).map { match.range(at: $0) }.first { $0.location != NSNotFound }
+            guard let group else { return nil }
+            let text = source.substring(with: group).trimmingCharacters(in: .whitespaces)
+            let lower = text.lowercased()
+            return versionKeywords.contains { lower.contains($0) } ? text : nil
+        }
+    }
+
     // MARK: - Вспомогательное
 
     /// "Группа крови (Blood Type)" → "Группа крови", "Кино (KINO)" → "Кино":

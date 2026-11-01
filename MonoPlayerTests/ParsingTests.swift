@@ -80,6 +80,22 @@ struct GeniusParsingTests {
         #expect(GeniusService.matches(song, artist: "daft punk", title: "Get Lucky (feat. Pharrell Williams)"))
         #expect(!GeniusService.matches(song, artist: "Other Artist", title: "Get Lucky"))
     }
+
+    @Test func prefersGeniusTitleOverJunk() {
+        #expect(GeniusService.preferredTitle(genius: "Get Lucky", tagged: "get lucky (Official Video) [Free DL]") == "Get Lucky")
+        #expect(GeniusService.preferredTitle(genius: "Империя", tagged: "Империя | prod. by someone") == "Империя")
+        #expect(GeniusService.preferredTitle(genius: "Song (Ft. X)", tagged: "Song") == "Song (Ft. X)")
+    }
+
+    @Test func keepsVersionMarkersFromTags() {
+        #expect(GeniusService.preferredTitle(genius: "Song", tagged: "Song (Slowed + Reverb) [Free DL]") == "Song (Slowed + Reverb)")
+        #expect(GeniusService.preferredTitle(genius: "Song", tagged: "Song - Live") == "Song (Live)")
+        #expect(GeniusService.preferredTitle(genius: "Song (Remix)", tagged: "Song (Remix) [Official Audio]") == "Song (Remix)")
+    }
+
+    @Test func keepsTaggedTitleWhenGeniusIsDifferentSong() {
+        #expect(GeniusService.preferredTitle(genius: "Love Story", tagged: "Love") == "Love")
+    }
 }
 
 struct SearchQueryTests {
