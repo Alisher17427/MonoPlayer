@@ -44,8 +44,11 @@ targets:
         # Фоновое воспроизведение
         UIBackgroundModes:
           - audio
-        # Импорт через «Поделиться» / «Открыть в MonoPlayer»
-        LSSupportsOpeningDocumentsInPlace: false
+        # Папка приложения видна в «Файлах» («На iPhone» → MonoPlayer) — для резервной копии треков
+        UIFileSharingEnabled: true
+        # Нужно и для «Файлов», и для импорта через «Поделиться» / «Открыть в MonoPlayer»
+        # (импорт копирует файл к себе с доступом security-scoped)
+        LSSupportsOpeningDocumentsInPlace: true
         CFBundleDocumentTypes:
           - CFBundleTypeName: Audio
             CFBundleTypeRole: Viewer
