@@ -49,18 +49,36 @@ struct LRCParserTests {
     }
 }
 
-struct ITunesMatchTests {
-    @Test func matchesIgnoringCaseAndPunctuation() {
-        let hit = ITunesTrack(trackName: "Get Lucky (feat. Pharrell Williams)", artistName: "Daft Punk",
-                              collectionName: "Random Access Memories", artworkUrl100: nil)
-        #expect(ITunesSearchService.bestMatch(in: [hit], artist: "daft punk", title: "Get Lucky") != nil)
-        #expect(ITunesSearchService.bestMatch(in: [hit], artist: "Other Artist", title: "Get Lucky") == nil)
+struct GeniusParsingTests {
+    @Test func extractsLyricsFromPage() {
+        let html = """
+        <div id="lyrics-root"><div data-lyrics-container="true" class="Lyrics__Container">\
+        <div data-exclude-from-selection="true" class="LyricsHeader"><div>12 Contributors</div>Song Lyrics</div>\
+        [Verse 1: Artist]<br/><a href="/1"><span>Like the legend</span></a> of the phoenix<br>It&#x27;s &amp; &quot;fine&quot;<br/>\
+        <br/>[Chorus]<br/>Up all night</div>\
+        <div class="Ad"><div>ad</div></div>\
+        <div data-lyrics-container="true">Second &#8212; block<br/></div></div>
+        """
+        #expect(GeniusService.extractLyrics(fromHTML: html) == "Like the legend of the phoenix\nIt's & \"fine\"\n\nUp all night\nSecond — block")
     }
 
-    @Test func upgradesArtworkResolution() {
-        let hit = ITunesTrack(trackName: nil, artistName: nil, collectionName: nil,
-                              artworkUrl100: "https://is1-ssl.mzstatic.com/image/thumb/x/100x100bb.jpg")
-        #expect(hit.hdArtworkURL?.absoluteString.hasSuffix("1000x1000bb.jpg") == true)
+    @Test func noLyricsContainer() {
+        #expect(GeniusService.extractLyrics(fromHTML: "<html><body>This song is an instrumental</body></html>") == nil)
+    }
+
+    @Test func cleansTransliteration() {
+        #expect(GeniusService.cleanName("Группа крови (Blood Type)") == "Группа крови")
+        #expect(GeniusService.cleanName("Кино (KINO)") == "Кино")
+        #expect(GeniusService.cleanName("Get Lucky (Radio Edit)") == "Get Lucky (Radio Edit)")
+        #expect(GeniusService.cleanName("Песня (Ft. Artist)") == "Песня (Ft. Artist)")
+    }
+
+    @Test func matchesArtistWithFeatures() {
+        let song = GeniusSong(id: 1, title: "Get Lucky", artist: "Daft Punk",
+                              artistNames: "Daft Punk (Ft. Nile Rodgers & Pharrell Williams)",
+                              url: URL(string: "https://genius.com/x")!, songArtURL: nil, instrumental: false)
+        #expect(GeniusService.matches(song, artist: "daft punk", title: "Get Lucky (feat. Pharrell Williams)"))
+        #expect(!GeniusService.matches(song, artist: "Other Artist", title: "Get Lucky"))
     }
 }
 
@@ -94,14 +112,13 @@ struct LyricsSelectionTests {
 
     @Test func prefersSyncedWithMatchingDuration() {
         let live = candidate(250, synced: true), studio = candidate(201, synced: true), plain = candidate(200, synced: false)
-        let best = LyricsService.pickBest([live, plain, studio], duration: 200, wantedTitle: "Song", wantedArtist: "Artist")
+        let best = LyricsService.pickSynced([live, plain, studio], duration: 200, wantedTitle: "Song", wantedArtist: "Artist")
         #expect(best?.id == studio.id)
     }
 
     @Test func rejectsSyncedOfDifferentVersion() {
         let live = candidate(250, synced: true), plain = candidate(200, synced: false)
-        let best = LyricsService.pickBest([live, plain], duration: 200, wantedTitle: "Song", wantedArtist: "Artist")
-        #expect(best?.id == plain.id)
+        #expect(LyricsService.pickSynced([live, plain], duration: 200, wantedTitle: "Song", wantedArtist: "Artist") == nil)
     }
 
     @Test func parsesOffsetAndWordTimestamps() {

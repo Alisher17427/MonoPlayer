@@ -11,7 +11,6 @@ struct LRCLibRecord: Decodable, Sendable {
     var instrumental: Bool?
 
     var hasSynced: Bool { syncedLyrics?.isEmpty == false }
-    var hasPlain: Bool { plainLyrics?.isEmpty == false }
 }
 
 /// Найденный текст — для автопоиска и ручного выбора.
@@ -26,24 +25,48 @@ struct LyricsCandidate: Sendable, Identifiable, Hashable {
     let syncedLyrics: String?
 
     var isSynced: Bool { syncedLyrics?.isEmpty == false }
-
-    var withoutSynced: LyricsCandidate {
-        LyricsCandidate(source: source, trackName: trackName, artistName: artistName, albumName: albumName,
-                        duration: duration, plainLyrics: plainLyrics, syncedLyrics: nil)
-    }
 }
 
 enum LyricsService {
     /// Допустимая разница длительностей, при которой тайминги LRC ещё совпадают с файлом.
     static let durationTolerance: TimeInterval = 3
 
-    /// Автопоиск: LRCLIB get → LRCLIB search по вариантам названия (выбор по длительности) → lyrics.ovh.
-    /// Синхронизированный текст важнее обычного; обычный берётся, только если синхронного нет нигде.
-    static func find(artist: String?, title: String, album: String?, duration: TimeInterval) async throws -> LyricsCandidate? {
-        var plainFallback: LyricsCandidate?
-        var anySucceeded = false
+    /// Автопоиск: текст — с Genius (песня `genius` уже найдена при поиске метаданных),
+    /// таймкоды — из LRCLIB, только если там есть та же версия трека (по длительности).
+    /// Без Genius-текста берётся текст из найденного синхронного LRC.
+    static func find(artist: String?, title: String, album: String?, duration: TimeInterval, genius: GeniusSong?) async throws -> LyricsCandidate? {
+        async let synced = syncedLyrics(artist: artist, title: title, album: album, duration: duration)
 
-        // 1. Точный запрос (LRCLIB сам сверяет длительность ±2 с)
+        var geniusText: String?
+        var geniusFailed = genius == nil
+        if let genius {
+            do {
+                geniusText = try await GeniusService.lyrics(of: genius)
+            } catch {
+                geniusFailed = true
+            }
+        }
+        let (record, lrclibReachable) = await synced
+
+        guard geniusText != nil || record != nil else {
+            if geniusFailed && !lrclibReachable { throw URLError(.notConnectedToInternet) }
+            return nil
+        }
+        return LyricsCandidate(
+            source: geniusText != nil ? "Genius" : "LRCLIB",
+            trackName: genius?.title ?? record?.trackName ?? title,
+            artistName: genius?.artist ?? record?.artistName ?? artist ?? "",
+            albumName: record?.albumName,
+            duration: record?.duration,
+            plainLyrics: geniusText ?? record?.plainLyrics,
+            syncedLyrics: record?.syncedLyrics
+        )
+    }
+
+    /// Синхронный текст LRCLIB: точный запрос (LRCLIB сам сверяет длительность ±2 с), затем поиск с выбором по длительности.
+    /// `reachable` — LRCLIB ответил хотя бы на один запрос.
+    private static func syncedLyrics(artist: String?, title: String, album: String?, duration: TimeInterval) async -> (LyricsCandidate?, reachable: Bool) {
+        var reachable = false
         if let artist, duration > 0 {
             for withAlbum in [true, false] where withAlbum == false || album != nil {
                 guard let url = HTTP.url("https://lrclib.net/api/get", [
@@ -51,40 +74,43 @@ enum LyricsService {
                     ("album_name", withAlbum ? album : nil),
                     ("duration", String(Int(duration.rounded()))),
                 ]) else { continue }
-                if let response = try? await HTTP.get(url) {
-                    let (data, status) = response
-                    anySucceeded = true
-                    if status == 200, let record = try? JSONDecoder().decode(LRCLibRecord.self, from: data) {
-                        let candidate = makeCandidate(record, fallbackTitle: title, fallbackArtist: artist)
-                        if candidate.isSynced { return candidate }
-                        if record.hasPlain { plainFallback = plainFallback ?? candidate }
-                    }
+                guard let response = try? await HTTP.get(url) else { continue }
+                let (data, status) = response
+                reachable = true
+                if status == 200, let record = try? JSONDecoder().decode(LRCLibRecord.self, from: data), record.hasSynced {
+                    return (makeCandidate(record, fallbackTitle: title, fallbackArtist: artist), true)
                 }
             }
         }
-
-        // 2. Поиск с выбором по длительности
-        do {
-            let candidates = try await search(artist: artist, title: title)
-            anySucceeded = true
-            if let best = pickBest(candidates, duration: duration, wantedTitle: title, wantedArtist: artist) {
-                if best.isSynced { return best }
-                plainFallback = plainFallback ?? best
+        if let candidates = try? await search(artist: artist, title: title) {
+            reachable = true
+            if let best = pickSynced(candidates, duration: duration, wantedTitle: title, wantedArtist: artist) {
+                return (best, true)
             }
-        } catch {}
-
-        if let plainFallback { return plainFallback }
-
-        // 3. Запасной источник обычного текста
-        if let artist, let plain = try? await lyricsOvh(artist: artist, title: title) {
-            return LyricsCandidate(source: "lyrics.ovh", trackName: title, artistName: artist, albumName: nil,
-                                   duration: nil, plainLyrics: plain, syncedLyrics: nil)
         }
-        if !anySucceeded { throw URLError(.notConnectedToInternet) }
-        return nil
+        return (nil, reachable)
     }
 
-    /// Все кандидаты LRCLIB по нескольким вариантам названия — для ручного выбора.
+    /// Ручной выбор: тексты Genius и синхронные версии LRCLIB.
+    static func candidates(artist: String?, title: String) async -> [LyricsCandidate] {
+        async let synced = (try? search(artist: artist, title: title)) ?? []
+        let songs = Array(((try? await GeniusService.search(artist: artist, title: title)) ?? []).prefix(3))
+        let genius = await withTaskGroup(of: (Int, LyricsCandidate?).self) { group in
+            for (index, song) in songs.enumerated() {
+                group.addTask {
+                    guard let text = try? await GeniusService.lyrics(of: song) else { return (index, nil) }
+                    return (index, LyricsCandidate(source: "Genius", trackName: song.title, artistName: song.artist, albumName: nil,
+                                                   duration: nil, plainLyrics: text, syncedLyrics: nil))
+                }
+            }
+            var result: [(Int, LyricsCandidate?)] = []
+            for await item in group { result.append(item) }
+            return result.sorted { $0.0 < $1.0 }.compactMap { $0.1 }
+        }
+        return genius + (await synced)
+    }
+
+    /// Синхронные тексты LRCLIB по нескольким вариантам названия.
     static func search(artist: String?, title: String) async throws -> [LyricsCandidate] {
         var result: [LyricsCandidate] = []
         var seen = Set<String>()
@@ -101,8 +127,8 @@ enum LyricsService {
                     succeeded = true
                     guard status == 200 else { continue }
                     let records = (try? JSONDecoder().decode([LRCLibRecord].self, from: data)) ?? []
-                    for record in records where record.hasSynced || record.hasPlain {
-                        let key = "\(record.trackName ?? "")|\(record.artistName ?? "")|\(Int(record.duration ?? 0))|\(record.hasSynced)"
+                    for record in records where record.hasSynced {
+                        let key = "\(record.trackName ?? "")|\(record.artistName ?? "")|\(Int(record.duration ?? 0))"
                         if seen.insert(key).inserted {
                             result.append(makeCandidate(record, fallbackTitle: variant, fallbackArtist: artist ?? ""))
                         }
@@ -111,41 +137,24 @@ enum LyricsService {
                     lastError = error
                 }
             }
-            if result.contains(where: \.isSynced) { break }
+            if !result.isEmpty { break }
         }
         if !succeeded, let lastError { throw lastError }
         return result
     }
 
-    /// Лучший кандидат: совпадает название/артист; среди синхронизированных — ближайший по длительности
-    /// в пределах допуска. Синхронный текст другой длительности (live, ремикс) не берётся — тайминги разъедутся.
-    static func pickBest(_ candidates: [LyricsCandidate], duration: TimeInterval, wantedTitle: String, wantedArtist: String?) -> LyricsCandidate? {
-        let relevant = candidates.filter {
-            SearchQuery.matches(title: $0.trackName, artist: $0.artistName, wantedTitle: wantedTitle, wantedArtist: wantedArtist)
-        }
+    /// Синхронный текст той же версии: совпадает название/артист, длительность — в пределах допуска.
+    /// Текст другой длительности (live, ремикс) не берётся — тайминги разъедутся.
+    static func pickSynced(_ candidates: [LyricsCandidate], duration: TimeInterval, wantedTitle: String, wantedArtist: String?) -> LyricsCandidate? {
         func distance(_ c: LyricsCandidate) -> TimeInterval {
             guard duration > 0, let d = c.duration else { return .greatestFiniteMagnitude / 2 }
             return abs(d - duration)
         }
-        let synced = relevant.filter(\.isSynced).sorted { distance($0) < distance($1) }
-        if let best = synced.first {
-            if duration <= 0 || best.duration == nil || distance(best) <= durationTolerance { return best }
-        }
-        // Запасной вариант — обычный текст. Синхронный текст чужой версии отбрасываем, оставляя только его слова.
-        if let plain = relevant.first(where: { !$0.isSynced && $0.plainLyrics?.isEmpty == false }) { return plain }
-        return relevant.first { $0.plainLyrics?.isEmpty == false }?.withoutSynced
-    }
-
-    private static func lyricsOvh(artist: String, title: String) async throws -> String? {
-        struct Response: Decodable { let lyrics: String? }
-        let path = "https://api.lyrics.ovh/v1/"
-            + (artist.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? artist) + "/"
-            + (title.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? title)
-        guard let url = URL(string: path) else { return nil }
-        let (data, status) = try await HTTP.get(url, timeout: 10)
-        guard status == 200 else { return nil }
-        let lyrics = try JSONDecoder().decode(Response.self, from: data).lyrics?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return lyrics?.isEmpty == false ? lyrics : nil
+        let best = candidates
+            .filter { $0.isSynced && SearchQuery.matches(title: $0.trackName, artist: $0.artistName, wantedTitle: wantedTitle, wantedArtist: wantedArtist) }
+            .min { distance($0) < distance($1) }
+        guard let best else { return nil }
+        return duration <= 0 || best.duration == nil || distance(best) <= durationTolerance ? best : nil
     }
 
     private static func makeCandidate(_ record: LRCLibRecord, fallbackTitle: String, fallbackArtist: String) -> LyricsCandidate {

@@ -20,8 +20,10 @@ struct SettingsView: View {
                     Text("Исполнители всегда разделяются по запятой, «feat.», «ft.» и «x». Выключите «&», если в медиатеке есть дуэты вроде «Simon & Garfunkel».")
                 }
                 Section {
-                    LabeledContent("Метаданные и обложки", value: "iTunes, Deezer, MusicBrainz")
-                    LabeledContent("Тексты песен", value: "LRCLIB, lyrics.ovh")
+                    LabeledContent("Метаданные и обложки", value: "Genius")
+                    LabeledContent("Тексты песен", value: "Genius")
+                    LabeledContent("Таймкоды текста", value: "LRCLIB")
+                    LabeledContent("Фото исполнителей", value: "Deezer")
                 } header: {
                     Text("Источники данных")
                 } footer: {

@@ -3,9 +3,7 @@ import Foundation
 /// Кандидат совпадения из любого источника — для автопоиска и ручного выбора.
 struct MetadataCandidate: Sendable, Identifiable, Hashable {
     enum Source: String, Sendable {
-        case iTunes = "iTunes"
-        case deezer = "Deezer"
-        case musicBrainz = "MusicBrainz"
+        case genius = "Genius"
     }
 
     let id = UUID()
@@ -104,13 +102,20 @@ enum SearchQuery {
 enum HTTP {
     static let userAgent = "MonoPlayer/1.1 (https://github.com/Alisher17427/MonoPlayer)"
 
-    static func get(_ url: URL, timeout: TimeInterval = 15) async throws -> (Data, Int) {
+    static func get(_ url: URL, timeout: TimeInterval = 15, accept: String? = "application/json") async throws -> (Data, Int) {
         var request = URLRequest(url: url)
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let accept { request.setValue(accept, forHTTPHeaderField: "Accept") }
         request.timeoutInterval = timeout
         let (data, response) = try await URLSession.shared.data(for: request)
         return (data, (response as? HTTPURLResponse)?.statusCode ?? 0)
+    }
+
+    /// Картинки и страницы: 200 или ошибка.
+    static func download(_ url: URL, accept: String? = nil) async throws -> Data {
+        let (data, status) = try await get(url, accept: accept)
+        guard status == 200 else { throw URLError(.badServerResponse) }
+        return data
     }
 
     static func url(_ base: String, _ items: [(String, String?)]) -> URL? {
@@ -120,39 +125,12 @@ enum HTTP {
     }
 }
 
-// MARK: - Deezer (обложки 1000×1000, без ключа)
+// MARK: - Deezer (фото исполнителей, без ключа)
 
 enum DeezerService {
-    private struct SearchResponse: Decodable {
-        struct Item: Decodable {
-            struct Artist: Decodable { let name: String }
-            struct Album: Decodable { let title: String?; let cover_xl: String? }
-            let title: String
-            let duration: Int?
-            let artist: Artist
-            let album: Album?
-        }
-        let data: [Item]?
-    }
-
     private struct ArtistResponse: Decodable {
         struct Item: Decodable { let name: String; let picture_xl: String? }
         let data: [Item]?
-    }
-
-    static func search(artist: String?, title: String) async throws -> [MetadataCandidate] {
-        let query = artist.map { "artist:\"\($0)\" track:\"\(title)\"" } ?? title
-        guard let url = HTTP.url("https://api.deezer.com/search", [("q", query), ("limit", "5")]) else { return [] }
-        let (data, status) = try await HTTP.get(url)
-        guard status == 200 else { throw URLError(.badServerResponse) }
-        let items = try JSONDecoder().decode(SearchResponse.self, from: data).data ?? []
-        return items.map {
-            MetadataCandidate(
-                source: .deezer, title: $0.title, artist: $0.artist.name, album: $0.album?.title,
-                artworkURL: $0.album?.cover_xl.flatMap(URL.init(string:)),
-                duration: $0.duration.map(TimeInterval.init)
-            )
-        }
     }
 
     /// Фото артиста для страницы исполнителя.
@@ -164,102 +142,5 @@ enum DeezerService {
         let wanted = SearchQuery.normalize(name)
         let match = items.first { SearchQuery.normalize($0.name) == wanted } ?? items.first
         return match?.picture_xl.flatMap(URL.init(string:))
-    }
-}
-
-// MARK: - MusicBrainz + Cover Art Archive (открытая база, редкие релизы)
-
-enum MusicBrainzService {
-    private struct Response: Decodable {
-        struct Recording: Decodable {
-            struct Credit: Decodable { let name: String }
-            struct Release: Decodable { let id: String; let title: String? }
-            let title: String
-            let length: Int?
-            let artistCredit: [Credit]?
-            let releases: [Release]?
-
-            enum CodingKeys: String, CodingKey {
-                case title, length, releases
-                case artistCredit = "artist-credit"
-            }
-        }
-        let recordings: [Recording]?
-    }
-
-    static func search(artist: String?, title: String) async throws -> [MetadataCandidate] {
-        var query = "recording:\"\(escape(title))\""
-        if let artist { query += " AND artist:\"\(escape(artist))\"" }
-        guard let url = HTTP.url("https://musicbrainz.org/ws/2/recording", [("query", query), ("fmt", "json"), ("limit", "5")]) else { return [] }
-        let (data, status) = try await HTTP.get(url)
-        guard status == 200 else { throw URLError(.badServerResponse) }
-        let recordings = try JSONDecoder().decode(Response.self, from: data).recordings ?? []
-        return recordings.map { recording in
-            let release = recording.releases?.first
-            return MetadataCandidate(
-                source: .musicBrainz,
-                title: recording.title,
-                artist: recording.artistCredit?.map(\.name).joined(separator: ", ") ?? "",
-                album: release?.title,
-                artworkURL: release.flatMap { URL(string: "https://coverartarchive.org/release/\($0.id)/front-1200") },
-                duration: recording.length.map { TimeInterval($0) / 1000 }
-            )
-        }
-    }
-
-    private static func escape(_ text: String) -> String {
-        text.replacingOccurrences(of: "\"", with: "")
-    }
-}
-
-// MARK: - Оркестратор
-
-enum MetadataSearch {
-    /// Автопоиск: iTunes → Deezer → MusicBrainz по нескольким вариантам названия.
-    /// Возвращает первое совпадение и, если у него нет обложки, ищет её у следующих источников.
-    static func bestMatch(artist: String?, title: String) async -> (match: MetadataCandidate?, artworkURL: URL?, allFailed: Bool) {
-        var match: MetadataCandidate?
-        var artworkURL: URL?
-        var attempts = 0, failures = 0
-
-        let sources: [(String?, String) async throws -> [MetadataCandidate]] = [
-            ITunesSearchService.candidates, DeezerService.search, MusicBrainzService.search,
-        ]
-        let variants = Array(SearchQuery.titleVariants(title).prefix(3))
-
-        sourceLoop: for source in sources {
-            for variant in variants {
-                attempts += 1
-                do {
-                    let candidates = try await source(artist, variant)
-                    let found = candidates.first { SearchQuery.matches(title: $0.title, artist: $0.artist, wantedTitle: title, wantedArtist: artist) }
-                    if let found {
-                        if match == nil { match = found }
-                        if artworkURL == nil { artworkURL = found.artworkURL }
-                        if artworkURL != nil { break sourceLoop }
-                        continue sourceLoop
-                    }
-                } catch {
-                    failures += 1
-                    continue sourceLoop
-                }
-            }
-        }
-        return (match, artworkURL, attempts > 0 && failures == attempts)
-    }
-
-    /// Ручной выбор: все кандидаты из всех источников параллельно.
-    static func allCandidates(artist: String?, title: String) async -> [MetadataCandidate] {
-        async let itunes = (try? ITunesSearchService.candidates(artist: artist, title: title)) ?? []
-        async let deezer = (try? DeezerService.search(artist: artist, title: title)) ?? []
-        async let brainz = (try? MusicBrainzService.search(artist: artist, title: title)) ?? []
-        var result = await itunes + deezer + brainz
-        // Без артиста — повторный поиск только по названию у iTunes и Deezer
-        if result.isEmpty, artist != nil {
-            async let i2 = (try? ITunesSearchService.candidates(artist: nil, title: title)) ?? []
-            async let d2 = (try? DeezerService.search(artist: nil, title: title)) ?? []
-            result = await i2 + d2
-        }
-        return result
     }
 }

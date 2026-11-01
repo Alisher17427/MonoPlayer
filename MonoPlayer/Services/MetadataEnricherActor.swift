@@ -70,15 +70,21 @@ actor MetadataEnricherActor {
         // В запросах — первый исполнитель: «rocket, lildrughill» ищем как «rocket»
         var queryArtist: String? { artist.flatMap { SearchQuery.splitArtists($0).first } ?? artist }
 
-        // Шаг 3: метаданные и обложка — iTunes → Deezer → MusicBrainz/Cover Art Archive
-        let search = await MetadataSearch.bestMatch(artist: queryArtist, title: title)
-        if let match = search.match, !locked {
-            if local.title == nil { title = match.title; result.title = match.title }
-            if artist == nil, !match.artist.isEmpty { artist = match.artist; result.artist = match.artist }
-            if album == nil, let value = match.album { album = value; result.album = value }
-        }
-        if artworkData == nil, !input.hasArtwork, let url = search.artworkURL {
-            artworkData = try? await ITunesSearchService.downloadData(from: url)
+        // Шаг 3: метаданные и обложка — Genius
+        let search = await GeniusService.bestMatch(artist: queryArtist, title: title)
+        if let song = search.song {
+            let needsAlbum = album == nil && !locked
+            let needsArtwork = artworkData == nil && !input.hasArtwork
+            var details: (album: String?, artworkURL: URL?)?
+            if needsAlbum || needsArtwork { details = try? await GeniusService.details(of: song) }
+            if !locked {
+                if local.title == nil { title = song.title; result.title = song.title }
+                if artist == nil, !song.artist.isEmpty { artist = song.artist; result.artist = song.artist }
+                if album == nil, let value = details?.album { album = value; result.album = value }
+            }
+            if needsArtwork, let url = details?.artworkURL ?? song.songArtURL {
+                artworkData = try? await HTTP.download(url)
+            }
         }
 
         if let artworkData {
@@ -92,7 +98,7 @@ actor MetadataEnricherActor {
         var lyricsFailed = false
         if !keepsLyrics {
             do {
-                if let lyrics = try await LyricsService.find(artist: queryArtist, title: title, album: album, duration: duration) {
+                if let lyrics = try await LyricsService.find(artist: queryArtist, title: title, album: album, duration: duration, genius: search.song) {
                     result.plainLyrics = lyrics.plainLyrics
                     result.syncedLyricsRaw = lyrics.syncedLyrics
                     lyricsFound = true
@@ -166,7 +172,7 @@ final class EnrichmentCoordinator {
 
     /// Ручной выбор обложки из кандидатов.
     func applyArtwork(from url: URL, to track: Track) async -> Bool {
-        guard let data = try? await ITunesSearchService.downloadData(from: url) else { return false }
+        guard let data = try? await HTTP.download(url) else { return false }
         return applyArtwork(data: data, to: track)
     }
 

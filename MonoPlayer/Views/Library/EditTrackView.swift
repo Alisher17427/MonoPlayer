@@ -283,7 +283,7 @@ struct EditTrackView: View {
         } header: {
             Text("Метаданные и обложка")
         } footer: {
-            Text("Источники: iTunes, Deezer, MusicBrainz. Выбор заполнит поля и заменит обложку.")
+            Text("Источник: Genius. Выбор заполнит поля и заменит обложку.")
         }
     }
 
@@ -320,6 +320,7 @@ struct EditTrackView: View {
                                 .foregroundStyle(Theme.Colors.labelSecondary)
                                 .lineLimit(1)
                             HStack(spacing: 6) {
+                                SourceBadge(text: candidate.source)
                                 SourceBadge(text: candidate.isSynced ? "Синхронный" : "Обычный")
                                 if let duration = candidate.duration {
                                     Text(durationNote(duration))
@@ -345,7 +346,7 @@ struct EditTrackView: View {
         } header: {
             Text("Текст песни")
         } footer: {
-            Text("Для караоке выбирайте синхронный текст с длительностью как у файла (\(track.duration.playbackTime)). Оранжевым отмечены версии другой длины — тайминги могут не совпасть.")
+            Text("Текст — с Genius, таймкоды для караоке — из LRCLIB. Синхронный текст выбирайте с длительностью как у файла (\(track.duration.playbackTime)); оранжевым отмечены версии другой длины — тайминги могут не совпасть.")
         }
     }
 
@@ -431,23 +432,23 @@ struct EditTrackView: View {
 
     private func searchMetadata() async {
         searchingMetadata = true
-        metadataCandidates = await MetadataSearch.allCandidates(artist: searchArtist, title: title.trimmingCharacters(in: .whitespaces))
+        metadataCandidates = await GeniusService.candidates(artist: searchArtist, title: title.trimmingCharacters(in: .whitespaces))
         searchingMetadata = false
         searchedMetadata = true
     }
 
     private func searchLyrics() async {
         searchingLyrics = true
-        let found = (try? await LyricsService.search(artist: searchArtist, title: title.trimmingCharacters(in: .whitespaces))) ?? []
-        // Синхронные и подходящие по длительности — наверх
-        lyricsCandidates = found.sorted { a, b in
+        let found = await LyricsService.candidates(artist: searchArtist, title: title.trimmingCharacters(in: .whitespaces))
+        // Синхронные той же длительности — наверх, затем Genius, затем синхронные других версий
+        lyricsCandidates = found.enumerated().sorted { a, b in
             func score(_ c: LyricsCandidate) -> Double {
-                let sync = c.isSynced ? 0 : 1000.0
-                guard track.duration > 0, let d = c.duration else { return sync + 500 }
-                return sync + abs(d - track.duration)
+                guard c.isSynced else { return 1000 }
+                guard track.duration > 0, let d = c.duration else { return 500 }
+                return durationMatches(d) ? abs(d - track.duration) : 2000 + abs(d - track.duration)
             }
-            return score(a) < score(b)
-        }
+            return (score(a.element), a.offset) < (score(b.element), b.offset)
+        }.map(\.element)
         searchingLyrics = false
         searchedLyrics = true
     }

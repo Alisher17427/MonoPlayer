@@ -161,7 +161,7 @@ final class ArtistMediaStore {
         loadingPictures.insert(key)
         defer { loadingPictures.remove(key) }
         guard let remote = try? await DeezerService.artistPictureURL(name: artist),
-              let data = try? await ITunesSearchService.downloadData(from: remote) else {
+              let data = try? await HTTP.download(remote) else {
             missingPictures.insert(key)
             return
         }
